@@ -92,6 +92,42 @@ export class HyperliquidClient {
     return response;
   }
 
+  /**
+   * Get L2 order book for an asset
+   * Returns best bid/ask and depth
+   */
+  async getL2Book(coin: string): Promise<{
+    bids: Array<{ px: string; sz: string; n: number }>;
+    asks: Array<{ px: string; sz: string; n: number }>;
+    bestBid: number;
+    bestAsk: number;
+    midPrice: number;
+    spread: number;
+    spreadBps: number;
+  }> {
+    this.log('Fetching l2Book for:', coin);
+    const response = await this.info.l2Book({ coin });
+
+    const bids = response.levels[0] as Array<{ px: string; sz: string; n: number }>;
+    const asks = response.levels[1] as Array<{ px: string; sz: string; n: number }>;
+
+    const bestBid = bids.length > 0 ? parseFloat(bids[0].px) : 0;
+    const bestAsk = asks.length > 0 ? parseFloat(asks[0].px) : 0;
+    const midPrice = (bestBid + bestAsk) / 2;
+    const spread = bestAsk - bestBid;
+    const spreadBps = midPrice > 0 ? (spread / midPrice) * 10000 : 0;
+
+    return {
+      bids,
+      asks,
+      bestBid,
+      bestAsk,
+      midPrice,
+      spread,
+      spreadBps,
+    };
+  }
+
   getAssetIndex(coin: string): number {
     const index = this.assetMap.get(coin);
     if (index === undefined) {

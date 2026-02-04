@@ -14,7 +14,12 @@
     "twap": "tsx scripts/operations/twap.ts",
     "scale": "tsx scripts/operations/scale.ts",
     "bracket": "tsx scripts/operations/bracket.ts",
-    "chase": "tsx scripts/operations/chase.ts"
+    "chase": "tsx scripts/operations/chase.ts",
+    "funding-arb": "tsx scripts/strategies/funding-arb.ts",
+    "grid": "tsx scripts/strategies/grid.ts",
+    "dca": "tsx scripts/strategies/dca.ts",
+    "mm-spread": "tsx scripts/strategies/mm-spread.ts",
+    "mm-maker": "tsx scripts/strategies/mm-maker.ts"
   },
   "dependencies": {
     "@nktkas/hyperliquid": "^0.30.3",

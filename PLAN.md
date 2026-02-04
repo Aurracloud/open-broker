@@ -211,25 +211,26 @@ npx tsx scripts/strategies/dca.ts \
 
 ## Development Phases
 
-### Phase 1 (Foundation) - CURRENT
+### Phase 1 (Foundation) - COMPLETE
 - [x] Project setup (package.json, tsconfig)
-- [ ] Core client with builder fee injection
-- [ ] Config management
-- [ ] Types and utils
-- [ ] Info scripts (account, positions, funding, markets)
-- [ ] Basic operations (market-order, limit-order, cancel)
-- [ ] SKILL.md
+- [x] Core client with builder fee injection
+- [x] Config management
+- [x] Types and utils
+- [x] Info scripts (account, positions, funding, markets)
+- [x] Basic operations (market-order, limit-order, cancel)
+- [x] SKILL.md
 
-### Phase 2 (Execution)
-- [ ] TWAP execution
-- [ ] Scale in/out
-- [ ] Bracket orders
-- [ ] Order monitoring
+### Phase 2 (Execution) - COMPLETE
+- [x] TWAP execution
+- [x] Scale in/out
+- [x] Bracket orders (with trigger orders for TP/SL)
+- [x] Chase orders
 
-### Phase 3 (Strategies)
-- [ ] Funding arbitrage
-- [ ] Grid trading
-- [ ] DCA automation
+### Phase 3 (Strategies) - COMPLETE
+- [x] Funding arbitrage
+- [x] Grid trading
+- [x] DCA automation
+- [x] Market making spread
 
 ---
 

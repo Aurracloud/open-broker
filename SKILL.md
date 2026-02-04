@@ -108,6 +108,53 @@ npx tsx scripts/operations/chase.ts --coin ETH --side buy --size 0.5 --timeout 3
 npx tsx scripts/operations/chase.ts --coin SOL --side buy --size 10 --offset 2 --timeout 60
 ```
 
+## Trading Strategies
+
+### Funding Arbitrage
+```bash
+# Collect funding on ETH if rate > 25% annualized
+npx tsx scripts/strategies/funding-arb.ts --coin ETH --size 5000 --min-funding 25
+
+# Run for 24 hours, check every 30 minutes
+npx tsx scripts/strategies/funding-arb.ts --coin BTC --size 10000 --duration 24 --check 30 --dry
+```
+
+### Grid Trading
+```bash
+# ETH grid from $3000-$4000 with 10 levels, 0.1 ETH per level
+npx tsx scripts/strategies/grid.ts --coin ETH --lower 3000 --upper 4000 --grids 10 --size 0.1
+
+# Accumulation grid (buys only)
+npx tsx scripts/strategies/grid.ts --coin BTC --lower 90000 --upper 100000 --grids 5 --size 0.01 --mode long
+```
+
+### DCA (Dollar Cost Averaging)
+```bash
+# Buy $100 of ETH every hour for 24 hours
+npx tsx scripts/strategies/dca.ts --coin ETH --amount 100 --interval 1h --count 24
+
+# Invest $5000 in BTC over 30 days with daily purchases
+npx tsx scripts/strategies/dca.ts --coin BTC --total 5000 --interval 1d --count 30
+```
+
+### Market Making Spread
+```bash
+# Market make ETH with 0.1 size, 10bps spread
+npx tsx scripts/strategies/mm-spread.ts --coin ETH --size 0.1 --spread 10
+
+# Tighter spread with position limit
+npx tsx scripts/strategies/mm-spread.ts --coin BTC --size 0.01 --spread 5 --max-position 0.1
+```
+
+### Maker-Only MM (ALO orders)
+```bash
+# Market make using ALO (post-only) orders - guarantees maker rebates
+npx tsx scripts/strategies/mm-maker.ts --coin HYPE --size 1 --offset 1
+
+# Wider offset for volatile assets
+npx tsx scripts/strategies/mm-maker.ts --coin ETH --size 0.1 --offset 2 --max-position 0.5
+```
+
 ## Script Arguments
 
 All scripts support `--dry` for dry run (preview without executing).
@@ -127,6 +174,7 @@ All scripts support `--dry` for dry run (preview without executing).
 ## References
 
 See `references/OPERATIONS.md` for detailed operation documentation.
+See `references/STRATEGIES.md` for detailed strategy documentation.
 
 ## Risk Warning
 

@@ -143,6 +143,141 @@ npx tsx scripts/operations/cancel.ts \
 
 ---
 
+## Advanced Execution Operations
+
+### twap.ts
+Time-Weighted Average Price execution - split large orders over time.
+
+```bash
+npx tsx scripts/operations/twap.ts \
+  --coin <COIN> \
+  --side <buy|sell> \
+  --size <SIZE> \
+  --duration <SECONDS> \
+  [--intervals <N>] \
+  [--randomize <PCT>] \
+  [--slippage <BPS>] \
+  [--dry]
+```
+
+**How it works:**
+1. Splits total size into N intervals
+2. Executes each slice as market order
+3. Optionally randomizes timing to avoid detection
+4. Reports VWAP and execution stats
+
+**Arguments:**
+- `--duration` - Total execution time in seconds
+- `--intervals` - Number of slices (default: 1 per 5 minutes)
+- `--randomize` - Randomize timing by ±X percent
+
+**Example:**
+```bash
+# Buy 2 ETH over 1 hour in 12 slices with 20% timing randomization
+npx tsx scripts/operations/twap.ts --coin ETH --side buy --size 2 --duration 3600 --intervals 12 --randomize 20
+```
+
+### scale.ts
+Scale In/Out - place a grid of limit orders at multiple price levels.
+
+```bash
+npx tsx scripts/operations/scale.ts \
+  --coin <COIN> \
+  --side <buy|sell> \
+  --size <SIZE> \
+  --levels <N> \
+  --range <PCT> \
+  [--distribution <linear|exponential|flat>] \
+  [--reduce] \
+  [--tif <GTC|ALO>] \
+  [--dry]
+```
+
+**How it works:**
+1. Calculates price levels based on range from mid
+2. Distributes size across levels based on distribution type
+3. Places limit orders at each level
+4. Reports order IDs for management
+
+**Distributions:**
+- `linear` (default) - More size at better prices (further from mid)
+- `exponential` - Much more size at better prices
+- `flat` - Equal size at all levels
+
+**Example:**
+```bash
+# Scale into 1 ETH with 5 buys ranging 2% below mid, more size at lower prices
+npx tsx scripts/operations/scale.ts --coin ETH --side buy --size 1 --levels 5 --range 2 --distribution linear
+```
+
+### bracket.ts
+Bracket Order - entry with take-profit and stop-loss.
+
+```bash
+npx tsx scripts/operations/bracket.ts \
+  --coin <COIN> \
+  --side <buy|sell> \
+  --size <SIZE> \
+  --tp <PCT> \
+  --sl <PCT> \
+  [--entry <market|limit>] \
+  [--price <PRICE>] \
+  [--slippage <BPS>] \
+  [--dry]
+```
+
+**How it works:**
+1. Executes entry order (market or limit)
+2. Places take-profit as reduce-only limit order
+3. Places stop-loss as reduce-only limit order
+4. Reports all order IDs
+
+**Important Notes:**
+- For LONG: TP above entry, SL below entry
+- For SHORT: TP below entry, SL above entry
+- Both TP and SL are limit orders - cancel one when the other fills!
+
+**Example:**
+```bash
+# Long ETH with 3% TP and 1.5% SL (2:1 risk/reward)
+npx tsx scripts/operations/bracket.ts --coin ETH --side buy --size 0.5 --tp 3 --sl 1.5
+```
+
+### chase.ts
+Chase Order - follow price with limit orders until filled.
+
+```bash
+npx tsx scripts/operations/chase.ts \
+  --coin <COIN> \
+  --side <buy|sell> \
+  --size <SIZE> \
+  [--offset <BPS>] \
+  [--timeout <SECONDS>] \
+  [--interval <MS>] \
+  [--max-chase <BPS>] \
+  [--reduce] \
+  [--dry]
+```
+
+**How it works:**
+1. Places ALO (post-only) order at mid ± offset
+2. Monitors price and adjusts order to follow
+3. Stops when filled, timeout reached, or max chase exceeded
+4. Guarantees maker rebates (no taker fees)
+
+**Arguments:**
+- `--offset` - Distance from mid in bps (default: 5)
+- `--timeout` - Max chase time in seconds (default: 300)
+- `--max-chase` - Max price move to chase in bps (default: 100)
+
+**Example:**
+```bash
+# Chase buy ETH with 5 bps offset, 5 min timeout
+npx tsx scripts/operations/chase.ts --coin ETH --side buy --size 0.5 --offset 5 --timeout 300
+```
+
+---
+
 ## Hyperliquid Specifics
 
 ### Funding

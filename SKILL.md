@@ -72,6 +72,42 @@ npx tsx scripts/operations/cancel.ts --coin ETH      # cancel ETH orders
 npx tsx scripts/operations/cancel.ts --oid 123456    # cancel specific order
 ```
 
+### TWAP (Time-Weighted Average Price)
+```bash
+# Execute 1 ETH buy over 1 hour (auto-calculates slices)
+npx tsx scripts/operations/twap.ts --coin ETH --side buy --size 1 --duration 3600
+
+# Custom intervals with randomization
+npx tsx scripts/operations/twap.ts --coin BTC --side sell --size 0.5 --duration 1800 --intervals 6 --randomize 20
+```
+
+### Scale In/Out (Grid Orders)
+```bash
+# Place 5 buy orders ranging 2% below current price
+npx tsx scripts/operations/scale.ts --coin ETH --side buy --size 1 --levels 5 --range 2
+
+# Scale out with exponential distribution
+npx tsx scripts/operations/scale.ts --coin BTC --side sell --size 0.5 --levels 4 --range 3 --distribution exponential --reduce
+```
+
+### Bracket Order (Entry + TP + SL)
+```bash
+# Long ETH with 3% take profit and 1.5% stop loss
+npx tsx scripts/operations/bracket.ts --coin ETH --side buy --size 0.5 --tp 3 --sl 1.5
+
+# Short with limit entry
+npx tsx scripts/operations/bracket.ts --coin BTC --side sell --size 0.1 --entry limit --price 100000 --tp 5 --sl 2
+```
+
+### Chase Order (Follow Price)
+```bash
+# Chase buy with ALO orders until filled
+npx tsx scripts/operations/chase.ts --coin ETH --side buy --size 0.5 --timeout 300
+
+# Aggressive chase with tight offset
+npx tsx scripts/operations/chase.ts --coin SOL --side buy --size 10 --offset 2 --timeout 60
+```
+
 ## Script Arguments
 
 All scripts support `--dry` for dry run (preview without executing).

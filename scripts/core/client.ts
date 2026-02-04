@@ -231,6 +231,111 @@ export class HyperliquidClient {
     );
   }
 
+  /**
+   * Place a trigger order (stop loss or take profit)
+   * @param coin - Asset to trade
+   * @param isBuy - True for buy, false for sell
+   * @param size - Order size
+   * @param triggerPrice - Price at which the order triggers
+   * @param limitPrice - Limit price for the order (use triggerPrice for market-like execution)
+   * @param tpsl - 'tp' for take profit, 'sl' for stop loss
+   * @param reduceOnly - Whether order is reduce-only (should be true for TP/SL)
+   */
+  async triggerOrder(
+    coin: string,
+    isBuy: boolean,
+    size: number,
+    triggerPrice: number,
+    limitPrice: number,
+    tpsl: 'tp' | 'sl',
+    reduceOnly: boolean = true
+  ): Promise<OrderResponse> {
+    await this.getMetaAndAssetCtxs();
+
+    const assetIndex = this.getAssetIndex(coin);
+    const szDecimals = this.getSzDecimals(coin);
+
+    // For trigger orders, we use the trigger order type
+    // isMarket: false means it becomes a limit order at limitPrice when triggered
+    // For stop loss, we typically want some slippage protection
+    const orderWire = {
+      a: assetIndex,
+      b: isBuy,
+      p: roundPrice(limitPrice, szDecimals),
+      s: roundSize(size, szDecimals),
+      r: reduceOnly,
+      t: {
+        trigger: {
+          triggerPx: roundPrice(triggerPrice, szDecimals),
+          isMarket: false,
+          tpsl,
+        },
+      },
+    };
+
+    this.log('Placing trigger order:', JSON.stringify(orderWire, null, 2));
+
+    const orderRequest: {
+      orders: typeof orderWire[];
+      grouping: 'na';
+      builder?: BuilderInfo;
+    } = {
+      orders: [orderWire],
+      grouping: 'na',
+    };
+
+    // Add builder fee if configured
+    if (this.config.builderAddress !== '0x0000000000000000000000000000000000000000') {
+      orderRequest.builder = this.builderInfo;
+      this.log('Including builder fee:', this.builderInfo);
+    }
+
+    try {
+      const response = await this.exchange.order(orderRequest);
+      this.log('Trigger order response:', JSON.stringify(response, null, 2));
+      return response as unknown as OrderResponse;
+    } catch (error) {
+      this.log('Trigger order error:', error);
+      return {
+        status: 'err',
+        response: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  /**
+   * Place a stop loss order
+   */
+  async stopLoss(
+    coin: string,
+    isBuy: boolean,
+    size: number,
+    triggerPrice: number,
+    slippageBps: number = 100 // 1% slippage for SL execution
+  ): Promise<OrderResponse> {
+    // For stop loss, limit price should be worse than trigger to ensure fill
+    // Buy SL: limit above trigger, Sell SL: limit below trigger
+    const slippageMult = slippageBps / 10000;
+    const limitPrice = isBuy
+      ? triggerPrice * (1 + slippageMult)
+      : triggerPrice * (1 - slippageMult);
+
+    return this.triggerOrder(coin, isBuy, size, triggerPrice, limitPrice, 'sl', true);
+  }
+
+  /**
+   * Place a take profit order
+   */
+  async takeProfit(
+    coin: string,
+    isBuy: boolean,
+    size: number,
+    triggerPrice: number
+  ): Promise<OrderResponse> {
+    // For take profit, we can use the same price as trigger (it's a favorable price)
+    return this.triggerOrder(coin, isBuy, size, triggerPrice, triggerPrice, 'tp', true);
+  }
+
   async cancel(coin: string, oid: number): Promise<CancelResponse> {
     await this.getMetaAndAssetCtxs();
 

@@ -10,7 +10,11 @@
     "markets": "tsx scripts/info/markets.ts",
     "market-order": "tsx scripts/operations/market-order.ts",
     "limit-order": "tsx scripts/operations/limit-order.ts",
-    "cancel": "tsx scripts/operations/cancel.ts"
+    "cancel": "tsx scripts/operations/cancel.ts",
+    "twap": "tsx scripts/operations/twap.ts",
+    "scale": "tsx scripts/operations/scale.ts",
+    "bracket": "tsx scripts/operations/bracket.ts",
+    "chase": "tsx scripts/operations/chase.ts"
   },
   "dependencies": {
     "@nktkas/hyperliquid": "^0.30.3",

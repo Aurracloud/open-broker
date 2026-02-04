@@ -109,7 +109,7 @@ async function main() {
   const rangePct = parseFloat(args.range as string);
   const distribution = (args.distribution as string || 'linear') as 'linear' | 'exponential' | 'flat';
   const reduceOnly = args.reduce as boolean;
-  const tif = ((args.tif as string)?.toUpperCase() || 'GTC') as 'Gtc' | 'Alo';
+  const tifArg = ((args.tif as string)?.toUpperCase() || 'GTC');
   const dryRun = args.dry as boolean;
 
   if (!coin || !side || isNaN(totalSize) || isNaN(numLevels) || isNaN(rangePct)) {
@@ -127,7 +127,14 @@ async function main() {
     process.exit(1);
   }
 
-  if (!['GTC', 'ALO'].includes(tif)) {
+  // Map uppercase CLI input to Pascal case for SDK
+  const tifMap: Record<string, 'Gtc' | 'Alo'> = {
+    'GTC': 'Gtc',
+    'ALO': 'Alo'
+  };
+
+  const tif = tifMap[tifArg];
+  if (!tif) {
     console.error('Error: --tif must be GTC or ALO');
     process.exit(1);
   }

@@ -1,6 +1,6 @@
 {
   "name": "open-broker",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Hyperliquid trading toolkit for AI agents - execute orders, strategies, and earn via builder codes",
   "type": "module",
   "scripts": {

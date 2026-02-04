@@ -13,7 +13,29 @@ export HYPERLIQUID_PRIVATE_KEY="0x..."
 
 # 3. Optional: Use testnet first
 export HYPERLIQUID_NETWORK="testnet"
+
+# 4. Approve builder fee (one-time, requires main wallet)
+npx tsx scripts/setup/approve-builder.ts
 ```
+
+## Builder Fee Setup
+
+Open Broker uses builder codes to fund development. Before trading, you must approve the builder fee:
+
+```bash
+# Check approval status
+npx tsx scripts/setup/approve-builder.ts --check
+
+# Approve builder fee (default: 0.1% max)
+npx tsx scripts/setup/approve-builder.ts
+```
+
+**Important:**
+- Must be signed by your **main wallet**, not an API wallet
+- Sub-accounts cannot approve builder fees
+- This is a one-time setup per account
+- Default fee charged: **1 bps (0.01%)** per trade
+- Fee only applies to successful fills
 
 ## Available Commands
 
@@ -111,10 +133,24 @@ export HYPERLIQUID_NETWORK="testnet"
 |----------|----------|-------------|
 | `HYPERLIQUID_PRIVATE_KEY` | Yes | Wallet private key (0x...) |
 | `HYPERLIQUID_NETWORK` | No | `mainnet` (default) or `testnet` |
-| `HYPERLIQUID_ACCOUNT_ADDRESS` | No | Trade on behalf of another address |
-| `BUILDER_ADDRESS` | No | Builder fee recipient |
+| `HYPERLIQUID_ACCOUNT_ADDRESS` | No | Trade on behalf of another address (for API wallets) |
+| `BUILDER_ADDRESS` | No | Custom builder address (default: open-broker) |
 | `BUILDER_FEE` | No | Builder fee in tenths of bps (default: 10 = 1bps) |
 | `SLIPPAGE_BPS` | No | Default slippage for market orders (default: 50) |
+
+### API Wallet Setup
+
+To use an API wallet (recommended for automated trading):
+
+```bash
+# Your API wallet's private key (the signer)
+export HYPERLIQUID_PRIVATE_KEY="0x..."
+
+# The main account address to trade on behalf of
+export HYPERLIQUID_ACCOUNT_ADDRESS="0x..."
+```
+
+**Important:** Builder fee approval must be done with the **main wallet**, not the API wallet. After approval, you can switch to using your API wallet for trading.
 
 ## Order Types
 

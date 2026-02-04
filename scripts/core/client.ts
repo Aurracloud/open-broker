@@ -33,7 +33,7 @@ export class HyperliquidClient {
     this.verbose = process.env.VERBOSE === '1' || process.env.VERBOSE === 'true';
 
     // Initialize SDK clients
-    this.transport = new HttpTransport({ url: this.config.baseUrl });
+    this.transport = new HttpTransport({ isMainnet: isMainnet() });
     this.info = new InfoClient({ transport: this.transport });
     this.exchange = new ExchangeClient({
       transport: this.transport,
@@ -48,12 +48,19 @@ export class HyperliquidClient {
     }
   }
 
+  /** The address we're trading on behalf of (may be different from wallet if using API wallet) */
   get address(): string {
-    return this.config.accountAddress ?? this.account.address;
+    return this.config.accountAddress;
   }
 
+  /** The address of the signing wallet (derived from private key) */
   get walletAddress(): string {
-    return this.account.address;
+    return this.config.walletAddress;
+  }
+
+  /** Whether we're using an API wallet (signing wallet differs from trading account) */
+  get isApiWallet(): boolean {
+    return this.config.isApiWallet;
   }
 
   get builderInfo(): BuilderInfo {
@@ -61,6 +68,14 @@ export class HyperliquidClient {
       b: this.config.builderAddress.toLowerCase(),
       f: this.config.builderFee,
     };
+  }
+
+  get builderAddress(): string {
+    return this.config.builderAddress;
+  }
+
+  get builderFeeBps(): number {
+    return this.config.builderFee / 10; // Convert from tenths of bps to bps
   }
 
   // ============ Market Data ============
@@ -145,6 +160,107 @@ export class HyperliquidClient {
   }
 
   // ============ Account Info ============
+
+  /**
+   * Check if an address has sub-accounts (is a master account)
+   * Sub-accounts cannot approve builder fees - only master accounts can
+   */
+  async getSubAccounts(user?: string): Promise<Array<{ subAccountUser: string; name: string }>> {
+    this.log('Fetching subAccounts for:', user ?? this.address);
+    try {
+      const response = await this.info.subAccounts({ user: user ?? this.address });
+      if (!response) return [];
+      // Response is an array of sub-account objects
+      return response.map((sub: { subAccountUser: string; name: string }) => ({
+        subAccountUser: sub.subAccountUser,
+        name: sub.name,
+      }));
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Check the maximum builder fee approved for a user/builder pair
+   * Returns the max fee rate as a string (e.g., "0.1%") or null if not approved
+   */
+  async getMaxBuilderFee(user?: string, builder?: string): Promise<string | null> {
+    // IMPORTANT: Hyperliquid API requires lowercase addresses
+    const targetUser = (user ?? this.address).toLowerCase();
+    const targetBuilder = (builder ?? this.config.builderAddress).toLowerCase();
+
+    this.log('Fetching maxBuilderFee for:', targetUser, 'builder:', targetBuilder);
+
+    try {
+      const baseUrl = isMainnet()
+        ? 'https://api.hyperliquid.xyz'
+        : 'https://api.hyperliquid-testnet.xyz';
+
+      const response = await fetch(baseUrl + '/info', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'maxBuilderFee',
+          user: targetUser,
+          builder: targetBuilder,
+        }),
+      });
+      const data = await response.json();
+      this.log('maxBuilderFee response:', data);
+
+      // API returns a number (fee in tenths of bps) or 0/null if not approved
+      // e.g., 100 = 10 bps = 0.1%
+      if (data !== null && data !== undefined && data !== 0) {
+        // Convert from tenths of bps to percentage string
+        const bps = Number(data) / 10;
+        const pct = bps / 100;
+        return `${pct}%`;
+      }
+      return null;
+    } catch (error) {
+      this.log('maxBuilderFee error:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Approve a builder fee for the open-broker builder
+   * IMPORTANT: This must be signed by a MAIN wallet, not an API wallet or sub-account
+   *
+   * @param maxFeeRate - Max fee rate to approve (e.g., "0.01%" for 1 bps)
+   * @param builder - Builder address (defaults to open-broker builder)
+   */
+  async approveBuilderFee(
+    maxFeeRate: string = '0.1%',
+    builder?: string
+  ): Promise<{ status: 'ok' | 'err'; response?: unknown }> {
+    const targetBuilder = builder ?? this.config.builderAddress;
+
+    this.log('Approving builder fee:', maxFeeRate, 'for builder:', targetBuilder);
+
+    // Check if using API wallet - this won't work
+    if (this.isApiWallet) {
+      return {
+        status: 'err',
+        response: 'Cannot approve builder fee with API wallet. Must use main wallet private key.',
+      };
+    }
+
+    try {
+      const response = await this.exchange.approveBuilderFee({
+        builder: targetBuilder as `0x${string}`,
+        maxFeeRate,
+      });
+      this.log('approveBuilderFee response:', response);
+      return { status: 'ok', response };
+    } catch (error) {
+      this.log('approveBuilderFee error:', error);
+      return {
+        status: 'err',
+        response: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
 
   async getUserState(user?: string): Promise<ClearinghouseState> {
     this.log('Fetching clearinghouseState for:', user ?? this.address);

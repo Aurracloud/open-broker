@@ -65,13 +65,18 @@ async function main() {
     process.exit(1);
   }
 
-  const validTifs = ['GTC', 'IOC', 'ALO'];
-  if (!validTifs.includes(tifArg)) {
-    console.error(`Error: --tif must be one of: ${validTifs.join(', ')}`);
+  // Map uppercase CLI input to Pascal case for SDK
+  const tifMap: Record<string, 'Gtc' | 'Ioc' | 'Alo'> = {
+    'GTC': 'Gtc',
+    'IOC': 'Ioc',
+    'ALO': 'Alo'
+  };
+
+  const tif = tifMap[tifArg];
+  if (!tif) {
+    console.error(`Error: --tif must be one of: GTC, IOC, ALO`);
     process.exit(1);
   }
-
-  const tif = tifArg as 'Gtc' | 'Ioc' | 'Alo';
   const isBuy = side === 'buy';
   const client = getClient();
 

@@ -5,9 +5,11 @@
 export interface OpenBrokerConfig {
   baseUrl: string;
   privateKey: `0x${string}`;
-  accountAddress?: string;
+  walletAddress: string;      // Address derived from private key (the signer)
+  accountAddress: string;     // Address to trade on behalf of (may differ if using API wallet)
+  isApiWallet: boolean;       // True if walletAddress != accountAddress
   builderAddress: string;
-  builderFee: number; // tenths of bps (10 = 1 bps)
+  builderFee: number;         // tenths of bps (10 = 1 bps)
   slippageBps: number;
 }
 

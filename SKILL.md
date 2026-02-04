@@ -27,6 +27,26 @@ Execute trading operations on Hyperliquid DEX with builder fee support.
    export HYPERLIQUID_NETWORK="testnet"
    ```
 
+5. **Approve builder fee** (one-time, using main wallet):
+   ```bash
+   npx tsx scripts/setup/approve-builder.ts
+   ```
+
+### Builder Fee
+
+Open Broker charges a 1 bps (0.01%) builder fee on trades to fund development.
+This requires a one-time approval from your main wallet:
+
+```bash
+# Check if approved
+npx tsx scripts/setup/approve-builder.ts --check
+
+# Approve (must use main wallet, not API wallet)
+npx tsx scripts/setup/approve-builder.ts
+```
+
+After approval, you can use API wallets for trading.
+
 ## Quick Reference
 
 ### Get Account Info

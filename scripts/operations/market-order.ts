@@ -2,7 +2,7 @@
 // Execute a market order on Hyperliquid
 
 import { getClient } from '../core/client.js';
-import { formatUsd, parseArgs } from '../core/utils.js';
+import { formatUsd, parseArgs, checkBuilderFeeApproval } from '../core/utils.js';
 
 function printUsage() {
   console.log(`
@@ -72,6 +72,9 @@ async function main() {
 
   console.log('Open Broker - Market Order');
   console.log('==========================\n');
+
+  // Check builder fee approval (warning only, don't block)
+  await checkBuilderFeeApproval(client);
 
   try {
     // Get current price

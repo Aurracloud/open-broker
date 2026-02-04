@@ -10,8 +10,24 @@ async function main() {
 
   console.log('Open Broker - Account Info');
   console.log('==========================\n');
-  console.log(`Address: ${client.address}`);
-  console.log(`Wallet:  ${client.walletAddress}\n`);
+
+  console.log('Wallet Configuration');
+  console.log('--------------------');
+  console.log(`Trading Account:  ${client.address}`);
+  console.log(`Signing Wallet:   ${client.walletAddress}`);
+  console.log(`Wallet Type:      ${client.isApiWallet ? 'API Wallet' : 'Main Wallet'}`);
+
+  // Check builder fee approval
+  const builderApproval = await client.getMaxBuilderFee();
+  console.log(`Builder Address:  ${client.builderAddress}`);
+  console.log(`Builder Fee:      ${client.builderFeeBps} bps`);
+  if (builderApproval) {
+    console.log(`Builder Approved: ✅ Yes (max: ${builderApproval})`);
+  } else {
+    console.log(`Builder Approved: ❌ No`);
+    console.log(`\n⚠️  Run: npx tsx scripts/setup/approve-builder.ts`);
+  }
+  console.log('');
 
   try {
     const state = await client.getUserState();

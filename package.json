@@ -4,6 +4,8 @@
   "description": "Hyperliquid trading toolkit for AI agents - execute orders, strategies, and earn via builder codes",
   "type": "module",
   "scripts": {
+    "setup": "tsx scripts/setup/approve-builder.ts",
+    "approve-builder": "tsx scripts/setup/approve-builder.ts",
     "account": "tsx scripts/info/account.ts",
     "positions": "tsx scripts/info/positions.ts",
     "funding": "tsx scripts/info/funding.ts",

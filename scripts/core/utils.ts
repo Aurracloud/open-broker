@@ -137,3 +137,20 @@ export function generateCloid(): string {
   }
   return result;
 }
+
+/**
+ * Check if builder fee is approved and print warning if not
+ * Returns true if approved, false if not
+ */
+export async function checkBuilderFeeApproval(
+  client: { getMaxBuilderFee: () => Promise<string | null>; builderAddress: string }
+): Promise<boolean> {
+  const approval = await client.getMaxBuilderFee();
+  if (!approval) {
+    console.log('⚠️  Builder fee not approved!');
+    console.log(`   Run: npx tsx scripts/setup/approve-builder.ts`);
+    console.log(`   Builder: ${client.builderAddress}\n`);
+    return false;
+  }
+  return true;
+}

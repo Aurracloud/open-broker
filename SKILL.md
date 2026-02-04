@@ -6,28 +6,44 @@ compatibility: Requires Node.js 22+, network access to api.hyperliquid.xyz
 metadata:
   author: monemetrics
   version: "1.0.0"
-allowed-tools: Bash(npx:*) Bash(tsx:*) Read
+allowed-tools: Bash(npx:*) Bash(tsx:*) Bash(npm:*) Read
 ---
 
 # Open Broker - Hyperliquid Trading Skill
 
 Execute trading operations on Hyperliquid DEX with builder fee support.
 
-## Setup
+## Quick Start (Automated Onboarding)
 
-1. Navigate to the open-broker directory
-2. Install dependencies: `npm install`
-3. Set environment variable:
+Run these two commands to get started:
+
+```bash
+npm install
+npx tsx scripts/setup/onboard.ts
+```
+
+This will automatically:
+1. Generate a new trading wallet
+2. Create `.env` with your private key
+3. Approve the builder fee (free, no funds needed)
+4. Display your wallet address to fund
+
+**After onboarding, fund your wallet:**
+1. Send USDC to your wallet address on Arbitrum
+2. Deposit to Hyperliquid at https://app.hyperliquid.xyz/
+3. Start trading!
+
+## Manual Setup (Alternative)
+
+If you prefer manual setup or have an existing wallet:
+
+1. Install dependencies: `npm install`
+2. Copy and configure environment:
    ```bash
-   export HYPERLIQUID_PRIVATE_KEY="0x..."
+   cp config/example.env .env
+   # Edit .env with your private key
    ```
-
-4. For testnet, also set:
-   ```bash
-   export HYPERLIQUID_NETWORK="testnet"
-   ```
-
-5. **Approve builder fee** (one-time, using main wallet):
+3. Approve builder fee:
    ```bash
    npx tsx scripts/setup/approve-builder.ts
    ```
@@ -35,7 +51,7 @@ Execute trading operations on Hyperliquid DEX with builder fee support.
 ### Builder Fee
 
 Open Broker charges a 1 bps (0.01%) builder fee on trades to fund development.
-This requires a one-time approval from your main wallet:
+The onboarding script handles this automatically. To check or manage manually:
 
 ```bash
 # Check if approved
@@ -44,8 +60,6 @@ npx tsx scripts/setup/approve-builder.ts --check
 # Approve (must use main wallet, not API wallet)
 npx tsx scripts/setup/approve-builder.ts
 ```
-
-After approval, you can use API wallets for trading.
 
 ## Quick Reference
 

@@ -2,40 +2,51 @@
 
 Hyperliquid trading toolkit for AI agents. Execute orders, manage positions, and run trading strategies on Hyperliquid DEX.
 
-## Quick Setup
+## Quick Start (Automated)
+
+```bash
+# 1. Install and onboard (creates wallet, configures everything)
+npm install
+npx tsx scripts/setup/onboard.ts
+```
+
+This will automatically:
+- Generate a new trading wallet
+- Create `.env` with your private key
+- Approve the builder fee (free, no funds needed)
+- Display your wallet address to fund
+
+**Next step:** Send USDC to your wallet on Arbitrum, then deposit to Hyperliquid at https://app.hyperliquid.xyz/
+
+## Manual Setup (Existing Wallet)
+
+If you already have a wallet:
 
 ```bash
 # 1. Install dependencies
 npm install
 
-# 2. Set environment variables
-export HYPERLIQUID_PRIVATE_KEY="0x..."
+# 2. Configure environment
+cp config/example.env .env
+# Edit .env with your private key
 
-# 3. Optional: Use testnet first
-export HYPERLIQUID_NETWORK="testnet"
-
-# 4. Approve builder fee (one-time, requires main wallet)
+# 3. Approve builder fee (one-time)
 npx tsx scripts/setup/approve-builder.ts
 ```
 
-## Builder Fee Setup
+## Builder Fee
 
-Open Broker uses builder codes to fund development. Before trading, you must approve the builder fee:
+Open Broker charges **1 bps (0.01%)** per trade to fund development.
 
 ```bash
 # Check approval status
 npx tsx scripts/setup/approve-builder.ts --check
 
-# Approve builder fee (default: 0.1% max)
+# Approve (uses main wallet, not API wallet)
 npx tsx scripts/setup/approve-builder.ts
 ```
 
-**Important:**
-- Must be signed by your **main wallet**, not an API wallet
-- Sub-accounts cannot approve builder fees
-- This is a one-time setup per account
-- Default fee charged: **1 bps (0.01%)** per trade
-- Fee only applies to successful fills
+**Note:** Must be signed by main wallet, not API wallet or sub-account.
 
 ## Available Commands
 

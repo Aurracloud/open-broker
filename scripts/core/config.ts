@@ -2,17 +2,27 @@
 
 import { config as loadDotenv } from 'dotenv';
 import { resolve } from 'path';
+import { existsSync } from 'fs';
 import { privateKeyToAccount } from 'viem/accounts';
 import type { OpenBrokerConfig } from './types.js';
 
-// Load .env from project root
-const projectRoot = resolve(import.meta.dirname, '../..');
-const envPath = resolve(projectRoot, '.env');
-const result = loadDotenv({ path: envPath });
+// Get project root relative to this file (scripts/core/config.ts -> project root)
+export const PROJECT_ROOT = resolve(import.meta.dirname, '../..');
+export const ENV_PATH = resolve(PROJECT_ROOT, '.env');
 
-if (process.env.VERBOSE === '1' || process.env.VERBOSE === 'true') {
-  console.log(`[DEBUG] Loading .env from: ${envPath}`);
-  console.log(`[DEBUG] .env loaded: ${result.parsed ? 'yes' : 'no (file may not exist)'}`);
+// Load .env from project root (silently skip if doesn't exist)
+if (existsSync(ENV_PATH)) {
+  // Set DOTENV_CONFIG_QUIET to suppress dotenv's default logging
+  process.env.DOTENV_CONFIG_QUIET = 'true';
+  const result = loadDotenv({ path: ENV_PATH });
+
+  if (process.env.VERBOSE === '1' || process.env.VERBOSE === 'true') {
+    console.log(`[DEBUG] Loading .env from: ${ENV_PATH}`);
+    console.log(`[DEBUG] .env loaded: ${result.parsed ? 'yes' : 'no'}`);
+  }
+} else if (process.env.VERBOSE === '1' || process.env.VERBOSE === 'true') {
+  console.log(`[DEBUG] No .env file found at: ${ENV_PATH}`);
+  console.log(`[DEBUG] Run 'npx tsx scripts/setup/onboard.ts' to create one`);
 }
 
 const MAINNET_URL = 'https://api.hyperliquid.xyz';
@@ -25,7 +35,16 @@ export const OPEN_BROKER_BUILDER_ADDRESS = '0xbb67021fA3e62ab4DA985bb5a55c5c1884
 export function loadConfig(): OpenBrokerConfig {
   const privateKey = process.env.HYPERLIQUID_PRIVATE_KEY;
   if (!privateKey) {
-    throw new Error('HYPERLIQUID_PRIVATE_KEY environment variable is required');
+    if (!existsSync(ENV_PATH)) {
+      throw new Error(
+        'No .env file found. Run onboarding first:\n\n' +
+        '  npx tsx scripts/setup/onboard.ts\n'
+      );
+    }
+    throw new Error(
+      'HYPERLIQUID_PRIVATE_KEY not found in .env file.\n' +
+      'Add it to your .env or run: npx tsx scripts/setup/onboard.ts'
+    );
   }
 
   if (!privateKey.startsWith('0x') || privateKey.length !== 66) {

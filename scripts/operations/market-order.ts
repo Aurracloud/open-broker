@@ -21,11 +21,18 @@ Options:
   --slippage  Slippage tolerance in bps (default: from config, usually 50 = 0.5%)
   --reduce    Reduce-only order (default: false)
   --dry       Dry run - show order details without executing
+  --verbose   Show full API request/response for debugging
+
+Environment:
+  HYPERLIQUID_PRIVATE_KEY  Your wallet private key (0x...)
+  HYPERLIQUID_NETWORK      "mainnet" or "testnet" (default: mainnet)
+  VERBOSE=1                Enable verbose logging
 
 Examples:
   npx tsx scripts/operations/market-order.ts --coin ETH --side buy --size 0.1
   npx tsx scripts/operations/market-order.ts --coin BTC --side sell --size 0.01 --slippage 100
   npx tsx scripts/operations/market-order.ts --coin SOL --side buy --size 10 --dry
+  npx tsx scripts/operations/market-order.ts --coin ETH --side buy --size 0.1 --verbose
 `);
 }
 
@@ -57,6 +64,11 @@ async function main() {
 
   const isBuy = side === 'buy';
   const client = getClient();
+
+  // Enable verbose mode if requested
+  if (args.verbose) {
+    client.verbose = true;
+  }
 
   console.log('Open Broker - Market Order');
   console.log('==========================\n');
@@ -102,7 +114,13 @@ async function main() {
     console.log('\nResult');
     console.log('------');
 
-    if (response.status === 'ok' && response.response) {
+    // Log full response for debugging
+    if (args.verbose || process.env.VERBOSE) {
+      console.log('\nFull Response:');
+      console.log(JSON.stringify(response, null, 2));
+    }
+
+    if (response.status === 'ok' && response.response && typeof response.response === 'object') {
       const statuses = response.response.data.statuses;
       for (const status of statuses) {
         if (status.filled) {
@@ -124,10 +142,17 @@ async function main() {
           console.log(`   Order ID:  ${status.resting.oid}`);
         } else if (status.error) {
           console.log(`❌ Error: ${status.error}`);
+        } else {
+          // Unknown status - show the whole thing
+          console.log(`⚠️  Unknown status:`);
+          console.log(JSON.stringify(status, null, 2));
         }
       }
+    } else if (response.status === 'err') {
+      console.log(`❌ API Error: ${response.response || JSON.stringify(response)}`);
     } else {
-      console.log(`❌ Error: ${response.error || 'Unknown error'}`);
+      console.log(`❌ Unexpected response:`);
+      console.log(JSON.stringify(response, null, 2));
     }
 
   } catch (error) {

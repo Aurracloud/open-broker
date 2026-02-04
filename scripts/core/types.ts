@@ -53,9 +53,10 @@ export interface OrderResponse {
         resting?: { oid: number };
         filled?: { totalSz: string; avgPx: string; oid: number };
         error?: string;
+        [key: string]: unknown; // Catch any other fields
       }>;
     };
-  };
+  } | string; // API can return string error message
   error?: string;
 }
 

@@ -1,6 +1,18 @@
 // Configuration loader for Open Broker
 
+import { config as loadDotenv } from 'dotenv';
+import { resolve } from 'path';
 import type { OpenBrokerConfig } from './types.js';
+
+// Load .env from project root
+const projectRoot = resolve(import.meta.dirname, '../..');
+const envPath = resolve(projectRoot, '.env');
+const result = loadDotenv({ path: envPath });
+
+if (process.env.VERBOSE === '1' || process.env.VERBOSE === 'true') {
+  console.log(`[DEBUG] Loading .env from: ${envPath}`);
+  console.log(`[DEBUG] .env loaded: ${result.parsed ? 'yes' : 'no (file may not exist)'}`);
+}
 
 const MAINNET_URL = 'https://api.hyperliquid.xyz';
 const TESTNET_URL = 'https://api.hyperliquid-testnet.xyz';

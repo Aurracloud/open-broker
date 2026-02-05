@@ -99,7 +99,7 @@ Examples:
   openbroker search --query GOLD                # Find GOLD across providers
   openbroker tpsl --coin HYPE --tp 40 --sl 30   # Set TP/SL on position
 
-Documentation: https://github.com/monemetrics/open-broker
+Documentation: https://github.com/aurracloud/open-broker
 `);
 }
 

@@ -2,6 +2,11 @@
 
 All notable changes to Open Broker will be documented in this file.
 
+## [1.0.35] - 2025-02-05
+
+### Fixed
+- Suppressed Node.js experimental warnings for cleaner CLI output
+
 ## [1.0.34] - 2025-02-05
 
 ### Changed

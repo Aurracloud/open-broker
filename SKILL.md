@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires Node.js 22+, network access to api.hyperliquid.xyz
 metadata:
   author: monemetrics
-  version: "1.0.34"
+  version: "1.0.35"
 allowed-tools: Bash(openbroker:*) Bash(npm:*) Read
 ---
 

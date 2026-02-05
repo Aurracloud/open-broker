@@ -23,6 +23,8 @@ const child = spawn(
       ...process.env,
       // Preserve the original working directory for local .env lookup
       OPENBROKER_CWD: process.cwd(),
+      // Suppress Node.js experimental warnings
+      NODE_NO_WARNINGS: '1',
     },
   }
 );
@@ -39,6 +41,7 @@ child.on('error', (err) => {
         env: {
           ...process.env,
           OPENBROKER_CWD: process.cwd(),
+          NODE_NO_WARNINGS: '1',
         },
       }
     );

@@ -64,6 +64,15 @@ npx tsx scripts/info/funding.ts --top 20
 
 # View market data
 npx tsx scripts/info/markets.ts --coin ETH
+
+# View all markets (perps, HIP-3, spot)
+npx tsx scripts/info/all-markets.ts --type all
+
+# Search for specific assets across providers
+npx tsx scripts/info/search-markets.ts --query GOLD
+
+# View spot markets and balances
+npx tsx scripts/info/spot.ts --balances
 ```
 
 ### Trading Operations

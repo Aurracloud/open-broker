@@ -2,6 +2,30 @@
 
 All notable changes to Open Broker will be documented in this file.
 
+## [1.0.3] - 2025-02-05
+
+### Added
+- **All Markets View**: New `all-markets.ts` script to view markets across all venues
+  - Shows main perps, HIP-3 perps, and spot markets in one view
+  - Filter by type: `--type perp`, `--type hip3`, `--type spot`
+  - Sort by 24h volume
+- **Market Search**: New `search-markets.ts` script to find assets across providers
+  - Search by coin name: `--query GOLD`, `--query BTC`
+  - Shows funding comparison when same asset available on multiple HIP-3 providers
+  - Displays price, volume, funding, and open interest
+- **Spot Markets**: New `spot.ts` script for spot market info
+  - View all spot trading pairs with prices and volumes
+  - Check spot token balances with `--balances`
+  - Filter by coin: `--coin PURR`
+- **Client Extensions**: Added new methods to HyperliquidClient
+  - `getPerpDexs()` - Get all perp DEXs including HIP-3
+  - `getAllPerpMetas()` - Get all perp markets across venues
+  - `getSpotMeta()` - Spot market metadata
+  - `getSpotMetaAndAssetCtxs()` - Spot metadata with prices/volumes
+  - `getSpotBalances()` - User's spot token balances
+  - `getTokenDetails()` - Token info by ID
+  - `getPredictedFundings()` - Predicted funding rates across venues
+
 ## [1.0.2] - 2025-02-05
 
 ### Added

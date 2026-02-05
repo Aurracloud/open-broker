@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires Node.js 22+, network access to api.hyperliquid.xyz
 metadata:
   author: monemetrics
-  version: "1.0.2"
+  version: "1.0.3"
 allowed-tools: Bash(npx:*) Bash(tsx:*) Bash(npm:*) Read
 ---
 
@@ -85,6 +85,30 @@ npx tsx scripts/info/funding.ts --coin ETH
 ```bash
 npx tsx scripts/info/markets.ts --top 30
 npx tsx scripts/info/markets.ts --coin BTC
+```
+
+### All Markets (Perps + Spot + HIP-3)
+```bash
+npx tsx scripts/info/all-markets.ts                 # Show all markets
+npx tsx scripts/info/all-markets.ts --type perp    # Main perps only
+npx tsx scripts/info/all-markets.ts --type hip3    # HIP-3 perps only
+npx tsx scripts/info/all-markets.ts --type spot    # Spot markets only
+npx tsx scripts/info/all-markets.ts --top 20       # Top 20 by volume
+```
+
+### Search Markets (Find assets across providers)
+```bash
+npx tsx scripts/info/search-markets.ts --query GOLD    # Find all GOLD markets
+npx tsx scripts/info/search-markets.ts --query BTC     # Find all BTC markets
+npx tsx scripts/info/search-markets.ts --query ETH --type perp  # ETH perps only
+```
+
+### Spot Markets
+```bash
+npx tsx scripts/info/spot.ts                  # Show all spot markets
+npx tsx scripts/info/spot.ts --coin PURR     # Show PURR market info
+npx tsx scripts/info/spot.ts --balances      # Show your spot balances
+npx tsx scripts/info/spot.ts --top 20        # Top 20 by volume
 ```
 
 ### Market Order

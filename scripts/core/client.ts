@@ -108,6 +108,283 @@ export class HyperliquidClient {
   }
 
   /**
+   * Get all perpetual DEXs (including HIP-3 builder-deployed markets)
+   * Returns array where index 0 is null (main dex), others are HIP-3 dexs
+   */
+  async getPerpDexs(): Promise<Array<{
+    name: string;
+    fullName: string;
+    deployer: string;
+  } | null>> {
+    this.log('Fetching perpDexs...');
+    const baseUrl = isMainnet()
+      ? 'https://api.hyperliquid.xyz'
+      : 'https://api.hyperliquid-testnet.xyz';
+
+    const response = await fetch(baseUrl + '/info', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'perpDexs' }),
+    });
+    const data = await response.json();
+    this.log('perpDexs response:', JSON.stringify(data).slice(0, 500));
+    return data;
+  }
+
+  /**
+   * Get all perp markets including HIP-3 dexs
+   * Returns array of [meta, assetCtxs] for each dex
+   */
+  async getAllPerpMetas(): Promise<Array<{
+    dexName: string | null;
+    meta: { universe: Array<{ name: string; szDecimals: number; maxLeverage: number; onlyIsolated?: boolean }> };
+    assetCtxs: Array<{
+      funding: string;
+      openInterest: string;
+      markPx: string;
+      midPx: string | null;
+      oraclePx: string;
+      prevDayPx: string;
+      dayNtlVlm: string;
+    }>;
+  }>> {
+    this.log('Fetching all perp markets...');
+    const baseUrl = isMainnet()
+      ? 'https://api.hyperliquid.xyz'
+      : 'https://api.hyperliquid-testnet.xyz';
+
+    const results: Array<{
+      dexName: string | null;
+      meta: { universe: Array<{ name: string; szDecimals: number; maxLeverage: number; onlyIsolated?: boolean }> };
+      assetCtxs: Array<{
+        funding: string;
+        openInterest: string;
+        markPx: string;
+        midPx: string | null;
+        oraclePx: string;
+        prevDayPx: string;
+        dayNtlVlm: string;
+      }>;
+    }> = [];
+
+    // Get main dex data (no dex parameter)
+    const mainResponse = await fetch(baseUrl + '/info', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'metaAndAssetCtxs' }),
+    });
+    const mainData = await mainResponse.json();
+    this.log('Main dex data fetched');
+
+    results.push({
+      dexName: null,
+      meta: { universe: mainData[0].universe },
+      assetCtxs: mainData[1],
+    });
+
+    // Get HIP-3 dex names
+    const dexs = await this.getPerpDexs();
+
+    // Fetch each HIP-3 dex by name
+    for (let i = 1; i < dexs.length; i++) {
+      const dex = dexs[i];
+      if (!dex) continue;
+
+      try {
+        const dexResponse = await fetch(baseUrl + '/info', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ type: 'metaAndAssetCtxs', dex: dex.name }),
+        });
+        const dexData = await dexResponse.json();
+
+        if (dexData && dexData[0]?.universe) {
+          this.log(`Fetched HIP-3 dex: ${dex.name} with ${dexData[0].universe.length} markets`);
+          results.push({
+            dexName: dex.name,
+            meta: { universe: dexData[0].universe },
+            assetCtxs: dexData[1] || [],
+          });
+        }
+      } catch (e) {
+        this.log(`Failed to fetch HIP-3 dex ${dex.name}:`, e);
+      }
+    }
+
+    return results;
+  }
+
+  /**
+   * Get spot market metadata
+   */
+  async getSpotMeta(): Promise<{
+    tokens: Array<{
+      name: string;
+      szDecimals: number;
+      weiDecimals: number;
+      index: number;
+      tokenId: string;
+      isCanonical: boolean;
+      fullName: string | null;
+    }>;
+    universe: Array<{
+      name: string;
+      tokens: [number, number];
+      index: number;
+      isCanonical: boolean;
+    }>;
+  }> {
+    this.log('Fetching spotMeta...');
+    const baseUrl = isMainnet()
+      ? 'https://api.hyperliquid.xyz'
+      : 'https://api.hyperliquid-testnet.xyz';
+
+    const response = await fetch(baseUrl + '/info', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'spotMeta' }),
+    });
+    const data = await response.json();
+    this.log('spotMeta response:', JSON.stringify(data).slice(0, 500));
+    return data;
+  }
+
+  /**
+   * Get spot metadata with asset contexts (prices, volumes)
+   */
+  async getSpotMetaAndAssetCtxs(): Promise<{
+    meta: {
+      tokens: Array<{
+        name: string;
+        szDecimals: number;
+        weiDecimals: number;
+        index: number;
+        tokenId: string;
+        isCanonical: boolean;
+      }>;
+      universe: Array<{
+        name: string;
+        tokens: [number, number];
+        index: number;
+        isCanonical: boolean;
+      }>;
+    };
+    assetCtxs: Array<{
+      dayNtlVlm: string;
+      markPx: string;
+      midPx: string;
+      prevDayPx: string;
+    }>;
+  }> {
+    this.log('Fetching spotMetaAndAssetCtxs...');
+    const baseUrl = isMainnet()
+      ? 'https://api.hyperliquid.xyz'
+      : 'https://api.hyperliquid-testnet.xyz';
+
+    const response = await fetch(baseUrl + '/info', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'spotMetaAndAssetCtxs' }),
+    });
+    const data = await response.json();
+    this.log('spotMetaAndAssetCtxs response:', JSON.stringify(data).slice(0, 500));
+    return {
+      meta: data[0],
+      assetCtxs: data[1],
+    };
+  }
+
+  /**
+   * Get user's spot token balances
+   */
+  async getSpotBalances(user?: string): Promise<{
+    balances: Array<{
+      coin: string;
+      token: number;
+      hold: string;
+      total: string;
+      entryNtl: string;
+    }>;
+  }> {
+    this.log('Fetching spotClearinghouseState for:', user ?? this.address);
+    const baseUrl = isMainnet()
+      ? 'https://api.hyperliquid.xyz'
+      : 'https://api.hyperliquid-testnet.xyz';
+
+    const response = await fetch(baseUrl + '/info', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        type: 'spotClearinghouseState',
+        user: user ?? this.address,
+      }),
+    });
+    const data = await response.json();
+    this.log('spotClearinghouseState response:', JSON.stringify(data).slice(0, 500));
+    return data;
+  }
+
+  /**
+   * Get token details by token ID
+   */
+  async getTokenDetails(tokenId: string): Promise<{
+    name: string;
+    maxSupply: string;
+    totalSupply: string;
+    circulatingSupply: string;
+    szDecimals: number;
+    weiDecimals: number;
+    midPx: string;
+    markPx: string;
+    prevDayPx: string;
+    deployer: string;
+    deployTime: string;
+  } | null> {
+    this.log('Fetching tokenDetails for:', tokenId);
+    const baseUrl = isMainnet()
+      ? 'https://api.hyperliquid.xyz'
+      : 'https://api.hyperliquid-testnet.xyz';
+
+    try {
+      const response = await fetch(baseUrl + '/info', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'tokenDetails',
+          tokenId,
+        }),
+      });
+      const data = await response.json();
+      this.log('tokenDetails response:', JSON.stringify(data).slice(0, 500));
+      return data;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Get predicted funding rates across venues
+   */
+  async getPredictedFundings(): Promise<Array<[
+    string, // coin
+    Array<[string, { fundingRate: string; nextFundingTime: number }]> // venue funding rates
+  ]>> {
+    this.log('Fetching predictedFundings...');
+    const baseUrl = isMainnet()
+      ? 'https://api.hyperliquid.xyz'
+      : 'https://api.hyperliquid-testnet.xyz';
+
+    const response = await fetch(baseUrl + '/info', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'predictedFundings' }),
+    });
+    const data = await response.json();
+    this.log('predictedFundings response length:', data?.length);
+    return data;
+  }
+
+  /**
    * Get L2 order book for an asset
    * Returns best bid/ask and depth
    */

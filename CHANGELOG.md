@@ -5,6 +5,10 @@ All notable changes to Open Broker will be documented in this file.
 ## [1.0.3] - 2025-02-05
 
 ### Added
+- **CLI Package**: Now installable as global CLI via `npm install -g openbroker`
+  - Single `openbroker` command with subcommands
+  - Shortcuts: `openbroker buy`, `openbroker sell` for quick market orders
+  - Full help: `openbroker --help`
 - **All Markets View**: New `all-markets.ts` script to view markets across all venues
   - Shows main perps, HIP-3 perps, and spot markets in one view
   - Filter by type: `--type perp`, `--type hip3`, `--type spot`

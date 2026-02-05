@@ -81,6 +81,21 @@ npx tsx scripts/operations/cancel.ts --all           # Cancel all orders
 npx tsx scripts/operations/cancel.ts --oid 123456    # Cancel specific order
 ```
 
+### Take Profit / Stop Loss
+
+```bash
+# Add TP/SL to an existing position
+npx tsx scripts/operations/set-tpsl.ts --coin HYPE --tp 40 --sl 30
+
+# Use percentages from entry price
+npx tsx scripts/operations/set-tpsl.ts --coin HYPE --tp +10% --sl entry
+
+# Standalone trigger order
+npx tsx scripts/operations/trigger-order.ts --coin HYPE --side sell --size 0.5 --trigger 40 --type tp
+```
+
+**Important:** Use trigger orders for TP/SL, NOT limit orders. Limit orders execute immediately if price is met.
+
 ### Advanced Execution
 
 ```bash

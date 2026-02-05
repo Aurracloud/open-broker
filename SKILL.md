@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires Node.js 22+, network access to api.hyperliquid.xyz
 metadata:
   author: monemetrics
-  version: "1.0.0"
+  version: "1.0.2"
 allowed-tools: Bash(npx:*) Bash(tsx:*) Bash(npm:*) Read
 ---
 
@@ -99,6 +99,30 @@ npx tsx scripts/operations/limit-order.ts --coin ETH --side buy --size 1 --price
 npx tsx scripts/operations/limit-order.ts --coin SOL --side sell --size 10 --price 200 --tif ALO
 ```
 
+### Set TP/SL on Existing Position
+```bash
+# Set take profit at $40, stop loss at $30
+npx tsx scripts/operations/set-tpsl.ts --coin HYPE --tp 40 --sl 30
+
+# Set TP at +10% from entry, SL at entry (breakeven)
+npx tsx scripts/operations/set-tpsl.ts --coin HYPE --tp +10% --sl entry
+
+# Set only stop loss at -5% from entry
+npx tsx scripts/operations/set-tpsl.ts --coin ETH --sl -5%
+
+# Partial position TP/SL
+npx tsx scripts/operations/set-tpsl.ts --coin ETH --tp 4000 --sl 3500 --size 0.5
+```
+
+### Trigger Order (Standalone TP/SL)
+```bash
+# Take profit: sell when price rises to $40
+npx tsx scripts/operations/trigger-order.ts --coin HYPE --side sell --size 0.5 --trigger 40 --type tp
+
+# Stop loss: sell when price drops to $30
+npx tsx scripts/operations/trigger-order.ts --coin HYPE --side sell --size 0.5 --trigger 30 --type sl
+```
+
 ### Cancel Orders
 ```bash
 npx tsx scripts/operations/cancel.ts --all           # cancel all
@@ -189,6 +213,32 @@ npx tsx scripts/strategies/mm-maker.ts --coin HYPE --size 1 --offset 1
 npx tsx scripts/strategies/mm-maker.ts --coin ETH --size 0.1 --offset 2 --max-position 0.5
 ```
 
+## Order Types
+
+### Limit Orders vs Trigger Orders
+
+**Limit Orders** (`limit-order.ts`):
+- Execute immediately if price is met
+- Rest on the order book until filled or cancelled
+- A limit sell BELOW current price fills immediately (taker)
+- NOT suitable for stop losses
+
+**Trigger Orders** (`trigger-order.ts`, `set-tpsl.ts`):
+- Stay dormant until trigger price is reached
+- Only activate when price hits the trigger level
+- Proper way to set stop losses and take profits
+- Won't fill prematurely
+
+### When to Use Each
+
+| Scenario | Use |
+|----------|-----|
+| Buy at specific price below market | Limit order |
+| Sell at specific price above market | Limit order |
+| Stop loss (exit if price drops) | Trigger order (SL) |
+| Take profit (exit at target) | Trigger order (TP) |
+| Add TP/SL to existing position | `set-tpsl.ts` |
+
 ## Script Arguments
 
 All scripts support `--dry` for dry run (preview without executing).
@@ -201,9 +251,17 @@ All scripts support `--dry` for dry run (preview without executing).
 - `--side` - buy or sell
 - `--size` - Order size in base asset
 - `--price` - Limit price (for limit orders)
+- `--trigger` - Trigger price (for trigger orders)
+- `--type` - Trigger type: tp (take profit) or sl (stop loss)
 - `--slippage` - Slippage tolerance in bps (for market orders)
 - `--tif` - Time in force: GTC, IOC, ALO
 - `--reduce` - Reduce-only order
+
+### TP/SL Price Formats
+- `--tp 40` - Absolute price ($40)
+- `--tp +10%` - 10% above entry price
+- `--sl -5%` - 5% below entry price
+- `--sl entry` - Stop at entry (breakeven)
 
 ## References
 

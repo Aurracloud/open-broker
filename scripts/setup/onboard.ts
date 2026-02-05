@@ -1,14 +1,18 @@
 #!/usr/bin/env npx tsx
-// Open Broker - Automated Onboarding for AI Agents
+// Open Broker - Automated Onboarding
 // Creates wallet, configures environment, and approves builder fee
 
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as readline from 'readline';
-import { fileURLToPath } from 'url';
+import { homedir } from 'os';
 
 const OPEN_BROKER_BUILDER_ADDRESS = '0xbb67021fA3e62ab4DA985bb5a55c5c1884381068';
+
+// Global config directory: ~/.openbroker/
+const CONFIG_DIR = path.join(homedir(), '.openbroker');
+const CONFIG_PATH = path.join(CONFIG_DIR, '.env');
 
 interface OnboardResult {
   success: boolean;
@@ -33,41 +37,39 @@ function prompt(rl: readline.Interface, question: string): Promise<string> {
 }
 
 function isValidPrivateKey(key: string): boolean {
-  // Check if it's a valid 64-char hex string with 0x prefix
   return /^0x[a-fA-F0-9]{64}$/.test(key);
 }
 
-// Get project root relative to this script (scripts/setup/onboard.ts -> project root)
-function getProjectRoot(): string {
-  const __filename = fileURLToPath(import.meta.url);
-  const __dirname = path.dirname(__filename);
-  return path.resolve(__dirname, '../..');
+function ensureConfigDir(): void {
+  if (!fs.existsSync(CONFIG_DIR)) {
+    fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
+  }
 }
 
 async function main(): Promise<OnboardResult> {
-  console.log('Open Broker - Automated Onboarding');
-  console.log('===================================\n');
+  console.log('OpenBroker - Setup');
+  console.log('==================\n');
 
-  const projectRoot = getProjectRoot();
-  const envPath = path.join(projectRoot, '.env');
-
-  // Check if .env already exists
-  if (fs.existsSync(envPath)) {
-    console.log('⚠️  .env file already exists!');
-    console.log('   To re-onboard, delete .env first or edit manually.\n');
+  // Check if config already exists
+  if (fs.existsSync(CONFIG_PATH)) {
+    console.log('⚠️  Config already exists!');
+    console.log(`   Location: ${CONFIG_PATH}\n`);
 
     // Read existing config and show wallet address
-    const envContent = fs.readFileSync(envPath, 'utf-8');
+    const envContent = fs.readFileSync(CONFIG_PATH, 'utf-8');
     const keyMatch = envContent.match(/HYPERLIQUID_PRIVATE_KEY=0x([a-fA-F0-9]{64})/);
 
     if (keyMatch) {
       const existingKey = `0x${keyMatch[1]}` as `0x${string}`;
       const account = privateKeyToAccount(existingKey);
-      console.log('Existing Configuration');
-      console.log('----------------------');
+      console.log('Current Configuration');
+      console.log('---------------------');
       console.log(`Wallet Address: ${account.address}`);
-      console.log(`\nTo fund this wallet, send USDC to the address above on Arbitrum.`);
-      console.log(`Then deposit to Hyperliquid at: https://app.hyperliquid.xyz/`);
+      console.log(`Config File:    ${CONFIG_PATH}`);
+      console.log(`\nTo reconfigure, delete the config file first:`);
+      console.log(`  rm ${CONFIG_PATH}`);
+      console.log(`\nTo fund this wallet, send USDC on Arbitrum, then deposit at:`);
+      console.log(`  https://app.hyperliquid.xyz/`);
 
       return {
         success: true,
@@ -77,7 +79,7 @@ async function main(): Promise<OnboardResult> {
 
     return {
       success: false,
-      error: 'Invalid .env file - missing or malformed private key',
+      error: 'Invalid config file - missing or malformed private key',
     };
   }
 
@@ -100,8 +102,7 @@ async function main(): Promise<OnboardResult> {
 
   if (choice === '1') {
     // User has existing key
-    console.log('\nEnter your private key (0x... format):');
-    console.log('(Input is hidden for security)\n');
+    console.log('\nEnter your private key (0x... format):\n');
 
     let validKey = false;
     while (!validKey) {
@@ -130,12 +131,13 @@ async function main(): Promise<OnboardResult> {
   const account = privateKeyToAccount(privateKey);
   console.log(`\nWallet Address: ${account.address}\n`);
 
-  // Create .env file
-  console.log('Creating .env file...');
+  // Create config directory and file
+  console.log('Creating config...');
+  ensureConfigDir();
 
-  const envContent = `# Open Broker - Environment Variables
-# Generated automatically during onboarding
-# WARNING: Keep this file secret! Never commit to git!
+  const envContent = `# OpenBroker Configuration
+# Location: ~/.openbroker/.env
+# WARNING: Keep this file secret! Never share it!
 
 # Your wallet private key
 HYPERLIQUID_PRIVATE_KEY=${privateKey}
@@ -143,14 +145,14 @@ HYPERLIQUID_PRIVATE_KEY=${privateKey}
 # Network: mainnet or testnet
 HYPERLIQUID_NETWORK=mainnet
 
-# Builder fee configuration (supports open-broker development)
+# Builder fee (supports openbroker development)
 # Default: 1 bps (0.01%) on trades
 BUILDER_ADDRESS=${OPEN_BROKER_BUILDER_ADDRESS}
 BUILDER_FEE=10
 `;
 
-  fs.writeFileSync(envPath, envContent, { mode: 0o600 }); // Restricted permissions
-  console.log(`✅ .env created at: ${envPath}\n`);
+  fs.writeFileSync(CONFIG_PATH, envContent, { mode: 0o600 });
+  console.log(`✅ Config saved to: ${CONFIG_PATH}\n`);
 
   // Approve builder fee
   console.log('Approving builder fee...');
@@ -177,48 +179,49 @@ BUILDER_FEE=10
         console.log('✅ Builder fee approved successfully!');
       } else {
         console.log(`⚠️  Approval may have failed: ${result.response}`);
-        console.log('   You can retry later: npx tsx scripts/setup/approve-builder.ts');
+        console.log('   You can retry later: openbroker approve-builder');
       }
     }
   } catch (error) {
     console.log(`⚠️  Could not approve builder fee: ${error}`);
-    console.log('   You can retry later: npx tsx scripts/setup/approve-builder.ts');
+    console.log('   You can retry later: openbroker approve-builder');
   }
 
   // Final summary
   console.log('\n========================================');
-  console.log('         ONBOARDING COMPLETE!          ');
+  console.log('           SETUP COMPLETE!             ');
   console.log('========================================\n');
 
   console.log('Your Trading Wallet');
   console.log('-------------------');
   console.log(`Address: ${account.address}`);
   console.log(`Network: Hyperliquid (Mainnet)`);
+  console.log(`Config:  ${CONFIG_PATH}`);
 
   if (choice === '2') {
     console.log('\n⚠️  IMPORTANT: Save your private key!');
     console.log('-----------------------------------');
     console.log(`Private Key: ${privateKey}`);
-    console.log('\nThis key is stored in .env but you should back it up securely.');
+    console.log('\nThis key is stored in ~/.openbroker/.env');
+    console.log('Back it up securely - if lost, funds cannot be recovered!');
   }
 
-  console.log('\n📋 Next Step: Fund Your Wallet');
-  console.log('-------------------------------');
-  console.log('1. Send USDC to your wallet on Arbitrum:');
+  console.log('\n📋 Next Steps');
+  console.log('--------------');
+  console.log('1. Fund your wallet with USDC on Arbitrum:');
   console.log(`   ${account.address}`);
   console.log('');
   console.log('2. Deposit USDC to Hyperliquid:');
   console.log('   https://app.hyperliquid.xyz/');
-  console.log('   (Connect wallet → Deposit → Select amount)');
   console.log('');
   console.log('3. Start trading!');
-  console.log('   npx tsx scripts/info/account.ts');
-  console.log('   npx tsx scripts/operations/market-order.ts --coin ETH --side buy --size 0.01 --dry');
+  console.log('   openbroker account');
+  console.log('   openbroker buy --coin ETH --size 0.01 --dry');
 
-  console.log('\n⚠️  SECURITY REMINDER');
-  console.log('---------------------');
-  console.log('Your private key is stored in .env');
-  console.log('NEVER share this file or commit it to git!');
+  console.log('\n⚠️  Security');
+  console.log('------------');
+  console.log(`Config stored at: ${CONFIG_PATH}`);
+  console.log('Never share this file or your private key!');
 
   return {
     success: true,
@@ -233,10 +236,10 @@ export { main as onboard };
 // Run if executed directly
 main().then(result => {
   if (!result.success) {
-    console.error(`\nOnboarding failed: ${result.error}`);
+    console.error(`\nSetup failed: ${result.error}`);
     process.exit(1);
   }
 }).catch(error => {
-  console.error('Onboarding error:', error);
+  console.error('Setup error:', error);
   process.exit(1);
 });

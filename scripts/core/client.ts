@@ -78,6 +78,20 @@ export class HyperliquidClient {
     return this.config.builderFee / 10; // Convert from tenths of bps to bps
   }
 
+  /** Whether client is in read-only mode (no trading capability) */
+  get isReadOnly(): boolean {
+    return this.config.isReadOnly;
+  }
+
+  /** Throw error if trying to trade in read-only mode */
+  private requireTrading(): void {
+    if (this.config.isReadOnly) {
+      throw new Error(
+        'Trading not available. Run "openbroker setup" to configure your wallet.'
+      );
+    }
+  }
+
   // ============ Market Data ============
 
   async getMetaAndAssetCtxs(): Promise<MetaAndAssetCtxs> {
@@ -562,6 +576,7 @@ export class HyperliquidClient {
     reduceOnly: boolean = false,
     includeBuilder: boolean = true
   ): Promise<OrderResponse> {
+    this.requireTrading();
     await this.getMetaAndAssetCtxs();
 
     const assetIndex = this.getAssetIndex(coin);
@@ -679,6 +694,7 @@ export class HyperliquidClient {
     tpsl: 'tp' | 'sl',
     reduceOnly: boolean = true
   ): Promise<OrderResponse> {
+    this.requireTrading();
     await this.getMetaAndAssetCtxs();
 
     const assetIndex = this.getAssetIndex(coin);
@@ -766,6 +782,7 @@ export class HyperliquidClient {
   }
 
   async cancel(coin: string, oid: number): Promise<CancelResponse> {
+    this.requireTrading();
     await this.getMetaAndAssetCtxs();
 
     const assetIndex = this.getAssetIndex(coin);
@@ -807,6 +824,7 @@ export class HyperliquidClient {
     leverage: number,
     isCross: boolean = true
   ): Promise<unknown> {
+    this.requireTrading();
     await this.getMetaAndAssetCtxs();
 
     const assetIndex = this.getAssetIndex(coin);

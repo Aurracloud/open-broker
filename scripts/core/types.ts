@@ -8,6 +8,7 @@ export interface OpenBrokerConfig {
   walletAddress: string;      // Address derived from private key (the signer)
   accountAddress: string;     // Address to trade on behalf of (may differ if using API wallet)
   isApiWallet: boolean;       // True if walletAddress != accountAddress
+  isReadOnly: boolean;        // True if using default key (no trading capability)
   builderAddress: string;
   builderFee: number;         // tenths of bps (10 = 1 bps)
   slippageBps: number;

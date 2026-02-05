@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires Node.js 22+, network access to api.hyperliquid.xyz
 metadata:
   author: monemetrics
-  version: "1.0.3"
+  version: "1.0.34"
 allowed-tools: Bash(openbroker:*) Bash(npm:*) Read
 ---
 
@@ -278,9 +278,14 @@ All commands support `--dry` for dry run (preview without executing).
 | Percentage down | `--sl -5%` | 5% below entry |
 | Entry price | `--sl entry` | Breakeven stop |
 
-## Environment Variables
+## Configuration
 
-Create a `.env` file or set these environment variables:
+Config is loaded from (in priority order):
+1. Environment variables
+2. `.env` in current directory
+3. `~/.openbroker/.env` (global config)
+
+Run `openbroker setup` to create the global config interactively.
 
 | Variable | Required | Description |
 |----------|----------|-------------|

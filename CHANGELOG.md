@@ -2,6 +2,19 @@
 
 All notable changes to Open Broker will be documented in this file.
 
+## [1.0.34] - 2025-02-05
+
+### Changed
+- **Global Config**: Config now stored in `~/.openbroker/.env` for global CLI usage
+  - Config loaded from: env vars > local `.env` > `~/.openbroker/.env`
+  - `openbroker setup` creates config in home directory
+  - Works from any directory without local `.env` file
+- **Read-Only Mode**: Info commands work without configuration
+  - Market data, funding rates, search all work immediately
+  - Shows warning: "Not configured for trading. Run openbroker setup to enable trades."
+  - Trading commands fail with clear error until configured
+- **Better Error Messages**: Clear instructions when config missing
+
 ## [1.0.3] - 2025-02-05
 
 ### Added

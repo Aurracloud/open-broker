@@ -116,12 +116,17 @@ export HYPERLIQUID_NETWORK="testnet"
 
 ## Configuration
 
-Create a `.env` file (or run `openbroker setup`):
+Config is loaded from these locations (in order of priority):
+1. Environment variables
+2. `.env` file in current directory
+3. `~/.openbroker/.env` (global config)
+
+Run `openbroker setup` to create the global config, or set environment variables:
 
 ```bash
-HYPERLIQUID_PRIVATE_KEY=0x...     # Required: wallet private key
-HYPERLIQUID_NETWORK=mainnet       # Optional: mainnet (default) or testnet
-HYPERLIQUID_ACCOUNT_ADDRESS=0x... # Optional: for API wallets
+export HYPERLIQUID_PRIVATE_KEY=0x...     # Required: wallet private key
+export HYPERLIQUID_NETWORK=mainnet       # Optional: mainnet (default) or testnet
+export HYPERLIQUID_ACCOUNT_ADDRESS=0x... # Optional: for API wallets
 ```
 
 ### API Wallet Setup
@@ -129,8 +134,8 @@ HYPERLIQUID_ACCOUNT_ADDRESS=0x... # Optional: for API wallets
 For automated trading, use an API wallet:
 
 ```bash
-HYPERLIQUID_PRIVATE_KEY="0x..."        # API wallet private key
-HYPERLIQUID_ACCOUNT_ADDRESS="0x..."    # Main account address
+export HYPERLIQUID_PRIVATE_KEY="0x..."        # API wallet private key
+export HYPERLIQUID_ACCOUNT_ADDRESS="0x..."    # Main account address
 ```
 
 **Note:** Builder fee must be approved with the main wallet first.

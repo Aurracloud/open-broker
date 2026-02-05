@@ -1,23 +1,57 @@
 #!/usr/bin/env node
 
-// This wrapper uses tsx to run the TypeScript CLI
+// This wrapper runs the TypeScript CLI using tsx
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import path from 'path';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const packageRoot = path.dirname(__dirname);
 const cliPath = path.join(__dirname, 'cli.ts');
 
-// Run the TypeScript CLI with tsx
+// Run the TypeScript CLI with tsx from package's node_modules
+const tsxBin = path.join(packageRoot, 'node_modules', '.bin', 'tsx');
+
 const child = spawn(
-  process.execPath,
-  ['--import', 'tsx', cliPath, ...process.argv.slice(2)],
+  tsxBin,
+  [cliPath, ...process.argv.slice(2)],
   {
     stdio: 'inherit',
-    cwd: process.cwd(),
+    cwd: packageRoot,
+    env: {
+      ...process.env,
+      // Preserve the original working directory for local .env lookup
+      OPENBROKER_CWD: process.cwd(),
+    },
   }
 );
+
+child.on('error', (err) => {
+  // If tsx binary not found, try npx tsx as fallback
+  if (err.code === 'ENOENT') {
+    const fallback = spawn(
+      'npx',
+      ['tsx', cliPath, ...process.argv.slice(2)],
+      {
+        stdio: 'inherit',
+        cwd: packageRoot,
+        env: {
+          ...process.env,
+          OPENBROKER_CWD: process.cwd(),
+        },
+      }
+    );
+    fallback.on('exit', (code) => process.exit(code ?? 0));
+    fallback.on('error', () => {
+      console.error('Error: tsx not found. Try reinstalling openbroker.');
+      process.exit(1);
+    });
+  } else {
+    console.error('Error:', err.message);
+    process.exit(1);
+  }
+});
 
 child.on('exit', (code) => {
   process.exit(code ?? 0);

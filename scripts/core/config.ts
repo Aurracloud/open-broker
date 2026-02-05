@@ -1,50 +1,105 @@
 // Configuration loader for Open Broker
 
 import { config as loadDotenv } from 'dotenv';
-import { resolve } from 'path';
-import { existsSync } from 'fs';
+import { resolve, join } from 'path';
+import { existsSync, mkdirSync } from 'fs';
+import { homedir } from 'os';
 import { privateKeyToAccount } from 'viem/accounts';
 import type { OpenBrokerConfig } from './types.js';
 
-// Get project root relative to this file (scripts/core/config.ts -> project root)
+// Config locations (in order of priority)
+// 1. Environment variables (always checked first by process.env)
+// 2. Local .env in current working directory
+// 3. Global config at ~/.openbroker/.env
+
+export const GLOBAL_CONFIG_DIR = join(homedir(), '.openbroker');
+export const GLOBAL_ENV_PATH = join(GLOBAL_CONFIG_DIR, '.env');
+// Use OPENBROKER_CWD if set (from CLI wrapper), otherwise use process.cwd()
+const userCwd = process.env.OPENBROKER_CWD || process.cwd();
+export const LOCAL_ENV_PATH = resolve(userCwd, '.env');
+
+// Package root (for reference, not config loading)
 export const PROJECT_ROOT = resolve(import.meta.dirname, '../..');
-export const ENV_PATH = resolve(PROJECT_ROOT, '.env');
-
-// Load .env from project root (silently skip if doesn't exist)
-if (existsSync(ENV_PATH)) {
-  // Set DOTENV_CONFIG_QUIET to suppress dotenv's default logging
-  process.env.DOTENV_CONFIG_QUIET = 'true';
-  const result = loadDotenv({ path: ENV_PATH });
-
-  if (process.env.VERBOSE === '1' || process.env.VERBOSE === 'true') {
-    console.log(`[DEBUG] Loading .env from: ${ENV_PATH}`);
-    console.log(`[DEBUG] .env loaded: ${result.parsed ? 'yes' : 'no'}`);
-  }
-} else if (process.env.VERBOSE === '1' || process.env.VERBOSE === 'true') {
-  console.log(`[DEBUG] No .env file found at: ${ENV_PATH}`);
-  console.log(`[DEBUG] Run 'npx tsx scripts/setup/onboard.ts' to create one`);
-}
 
 const MAINNET_URL = 'https://api.hyperliquid.xyz';
 const TESTNET_URL = 'https://api.hyperliquid-testnet.xyz';
 
 // Open Broker builder address - receives builder fees on all trades
-// This funds continued development of the open-broker project
 export const OPEN_BROKER_BUILDER_ADDRESS = '0xbb67021fA3e62ab4DA985bb5a55c5c1884381068';
 
-export function loadConfig(): OpenBrokerConfig {
-  const privateKey = process.env.HYPERLIQUID_PRIVATE_KEY;
-  if (!privateKey) {
-    if (!existsSync(ENV_PATH)) {
-      throw new Error(
-        'No .env file found. Run onboarding first:\n\n' +
-        '  npx tsx scripts/setup/onboard.ts\n'
-      );
+// Default read-only key (for info commands that don't need authentication)
+// This is a valid but essentially useless private key
+const DEFAULT_READ_ONLY_KEY = '0x0000000000000000000000000000000000000000000000000000000000000001' as const;
+
+// Track if we've shown the read-only warning
+let readOnlyWarningShown = false;
+
+/**
+ * Find and load the config file from multiple locations
+ * Priority: env vars > local .env > global ~/.openbroker/.env > project .env
+ */
+function loadEnvFile(): string | null {
+  const verbose = process.env.VERBOSE === '1' || process.env.VERBOSE === 'true';
+  process.env.DOTENV_CONFIG_QUIET = 'true';
+
+  // Check locations in order of priority
+  const locations = [
+    { path: LOCAL_ENV_PATH, name: 'local (.env)' },
+    { path: GLOBAL_ENV_PATH, name: 'global (~/.openbroker/.env)' },
+  ];
+
+  for (const { path, name } of locations) {
+    if (existsSync(path)) {
+      const result = loadDotenv({ path });
+      if (verbose) {
+        console.log(`[DEBUG] Loaded config from ${name}: ${path}`);
+      }
+      return path;
     }
-    throw new Error(
-      'HYPERLIQUID_PRIVATE_KEY not found in .env file.\n' +
-      'Add it to your .env or run: npx tsx scripts/setup/onboard.ts'
-    );
+  }
+
+  if (verbose) {
+    console.log('[DEBUG] No config file found in any location');
+    console.log('[DEBUG] Run "openbroker setup" to configure');
+  }
+
+  return null;
+}
+
+// Load config on module import
+const loadedConfigPath = loadEnvFile();
+
+/**
+ * Ensure the global config directory exists
+ */
+export function ensureConfigDir(): string {
+  if (!existsSync(GLOBAL_CONFIG_DIR)) {
+    mkdirSync(GLOBAL_CONFIG_DIR, { recursive: true, mode: 0o700 });
+  }
+  return GLOBAL_CONFIG_DIR;
+}
+
+/**
+ * Get the path where config was loaded from, or where it should be saved
+ */
+export function getConfigPath(): string {
+  return loadedConfigPath || GLOBAL_ENV_PATH;
+}
+
+export function loadConfig(): OpenBrokerConfig {
+  let privateKey = process.env.HYPERLIQUID_PRIVATE_KEY;
+  let isReadOnly = false;
+
+  if (!privateKey) {
+    // Use default read-only key for info commands
+    privateKey = DEFAULT_READ_ONLY_KEY;
+    isReadOnly = true;
+
+    // Show warning once
+    if (!readOnlyWarningShown) {
+      readOnlyWarningShown = true;
+      console.log('\x1b[33m⚠️  Not configured for trading. Run "openbroker setup" to enable trades.\x1b[0m\n');
+    }
   }
 
   if (!privateKey.startsWith('0x') || privateKey.length !== 66) {
@@ -64,7 +119,6 @@ export function loadConfig(): OpenBrokerConfig {
   const walletAddress = wallet.address.toLowerCase();
 
   // Account address can be different if using an API wallet
-  // If not specified, use the wallet address itself
   const accountAddress = process.env.HYPERLIQUID_ACCOUNT_ADDRESS?.toLowerCase();
 
   // Determine if this is an API wallet setup
@@ -76,10 +130,18 @@ export function loadConfig(): OpenBrokerConfig {
     walletAddress,
     accountAddress: accountAddress || walletAddress,
     isApiWallet,
+    isReadOnly,
     builderAddress,
     builderFee,
     slippageBps,
   };
+}
+
+/**
+ * Check if the current config is read-only (no trading capability)
+ */
+export function isConfigured(): boolean {
+  return !!process.env.HYPERLIQUID_PRIVATE_KEY;
 }
 
 export function getNetwork(): 'mainnet' | 'testnet' {

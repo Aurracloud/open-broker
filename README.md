@@ -26,9 +26,13 @@ openbroker search --query GOLD              # Find markets
 
 ### Setup
 ```bash
-openbroker setup                # Interactive setup wizard
-openbroker approve-builder      # Approve builder fee (one-time)
+openbroker setup                # One-command setup (wallet + config + builder approval)
 ```
+
+The setup command handles everything automatically:
+- Generates a new wallet or accepts your existing private key
+- Saves configuration to `~/.openbroker/.env`
+- Approves the builder fee (required for trading)
 
 ### Account Info
 ```bash
@@ -142,11 +146,11 @@ export HYPERLIQUID_ACCOUNT_ADDRESS="0x..."    # Main account address
 
 ## Builder Fee
 
-Open Broker charges **1 bps (0.01%)** per trade to fund development.
+Open Broker charges **1 bps (0.01%)** per trade to fund development. The builder fee is automatically approved during `openbroker setup`.
 
 ```bash
-openbroker approve-builder --check  # Check status
-openbroker approve-builder          # Approve (free, no funds needed)
+openbroker approve-builder --check  # Check approval status
+openbroker approve-builder          # Retry approval if needed
 ```
 
 ## Development

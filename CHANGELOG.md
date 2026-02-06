@@ -2,6 +2,14 @@
 
 All notable changes to Open Broker will be documented in this file.
 
+## [1.0.36] - 2025-02-06
+
+### Changed
+- **Streamlined Setup**: Builder fee approval is now clearly part of `openbroker setup`
+  - Single command does wallet creation, config save, and builder approval
+  - Updated docs to clarify approval is automatic
+  - `approve-builder` moved to utility section (for retry/troubleshooting)
+
 ## [1.0.35] - 2025-02-05
 
 ### Fixed

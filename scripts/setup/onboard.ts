@@ -47,8 +47,9 @@ function ensureConfigDir(): void {
 }
 
 async function main(): Promise<OnboardResult> {
-  console.log('OpenBroker - Setup');
-  console.log('==================\n');
+  console.log('OpenBroker - One-Command Setup');
+  console.log('==============================\n');
+  console.log('This will: 1) Create wallet  2) Save config  3) Approve builder fee\n');
 
   // Check if config already exists
   if (fs.existsSync(CONFIG_PATH)) {
@@ -86,6 +87,8 @@ async function main(): Promise<OnboardResult> {
   // Ask user if they have an existing private key
   const rl = createReadline();
 
+  console.log('Step 1/3: Wallet Setup');
+  console.log('----------------------');
   console.log('Do you have an existing Hyperliquid private key?\n');
   console.log('  1) Yes, I have a private key ready');
   console.log('  2) No, generate a new wallet for me\n');
@@ -132,7 +135,7 @@ async function main(): Promise<OnboardResult> {
   console.log(`\nWallet Address: ${account.address}\n`);
 
   // Create config directory and file
-  console.log('Creating config...');
+  console.log('Step 2/3: Creating config...');
   ensureConfigDir();
 
   const envContent = `# OpenBroker Configuration
@@ -154,9 +157,9 @@ BUILDER_FEE=10
   fs.writeFileSync(CONFIG_PATH, envContent, { mode: 0o600 });
   console.log(`✅ Config saved to: ${CONFIG_PATH}\n`);
 
-  // Approve builder fee
-  console.log('Approving builder fee...');
-  console.log('(This is free and required before trading)\n');
+  // Approve builder fee (automatic - no user action needed)
+  console.log('Step 3/3: Approving builder fee...');
+  console.log('(This is automatic, and required for trading)\n');
 
   try {
     // Import and run approve-builder inline

@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires Node.js 22+, network access to api.hyperliquid.xyz
 metadata:
   author: monemetrics
-  version: "1.0.35"
+  version: "1.0.37"
 allowed-tools: Bash(openbroker:*) Bash(npm:*) Read
 ---
 
@@ -34,12 +34,16 @@ openbroker buy --coin ETH --size 0.1
 
 ## Command Reference
 
-### Setup Commands
+### Setup
 ```bash
-openbroker setup              # Interactive setup wizard
-openbroker approve-builder    # Approve builder fee (one-time)
-openbroker approve-builder --check  # Check approval status
+openbroker setup              # One-command setup (wallet + config + builder approval)
+openbroker approve-builder --check  # Check builder fee status (for troubleshooting)
 ```
+
+The `setup` command handles everything:
+1. Generate new wallet or use existing private key
+2. Save config to `~/.openbroker/.env`
+3. Automatically approve builder fee (required for trading)
 
 ### Account Info
 ```bash

@@ -51,9 +51,8 @@ Open Broker - Hyperliquid Trading CLI
 
 Usage: openbroker <command> [options]
 
-Setup Commands:
-  setup, onboard       Interactive setup wizard (generate wallet, configure)
-  approve-builder      Approve builder fee (one-time)
+Setup:
+  setup                One-command setup (wallet + config + builder approval)
 
 Info Commands:
   account              View account balance, equity, and margin
@@ -91,8 +90,11 @@ Options:
   --dry                Preview without executing
   --verbose            Show debug output
 
+Utility:
+  approve-builder      Check or retry builder fee approval
+
 Examples:
-  openbroker setup                              # First-time setup
+  openbroker setup                              # First-time setup (does everything)
   openbroker account                            # View account info
   openbroker buy --coin ETH --size 0.1          # Market buy 0.1 ETH
   openbroker limit --coin BTC --side buy --size 0.01 --price 60000

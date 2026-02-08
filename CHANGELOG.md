@@ -2,6 +2,9 @@
 
 All notable changes to Open Broker will be documented in this file.
 
+## [1.0.37] - 2025-02-08
+- **Detailed Docs**: Adding detailed docs for all sub commands
+
 ## [1.0.36] - 2025-02-06
 
 ### Changed

@@ -3,9 +3,8 @@ name: openbroker
 description: Hyperliquid trading CLI. Execute market orders, limit orders, manage positions, view funding rates, and run trading strategies. Use for any Hyperliquid perp trading task.
 license: MIT
 compatibility: Requires Node.js 22+, network access to api.hyperliquid.xyz
-metadata:
-  author: monemetrics
-  version: "1.0.37"
+homepage: https://www.npmjs.com/package/openbroker
+metadata: {"author": "monemetrics", "version": "1.0.39", "openclaw": {"requires": {"bins": ["openbroker"], "env": ["HYPERLIQUID_PRIVATE_KEY"]}, "primaryEnv": "HYPERLIQUID_PRIVATE_KEY", "install": [{"id": "node", "kind": "node", "package": "openbroker", "bins": ["openbroker"], "label": "Install openbroker (npm)"}]}}
 allowed-tools: Bash(openbroker:*) Bash(npm:*) Read
 ---
 

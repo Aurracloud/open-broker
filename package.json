@@ -1,15 +1,19 @@
 {
   "name": "openbroker",
-  "version": "1.0.41",
+  "version": "1.0.42",
   "description": "Hyperliquid trading CLI - execute orders, manage positions, and run trading strategies",
   "type": "module",
   "bin": {
     "openbroker": "./bin/openbroker.js"
   },
+  "openclaw": {
+    "extensions": ["./scripts/plugin/index.ts"]
+  },
   "files": [
     "bin/",
     "scripts/",
     "config/example.env",
+    "openclaw.plugin.json",
     "README.md",
     "CHANGELOG.md",
     "SKILL.md"

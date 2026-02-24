@@ -1,0 +1,86 @@
+{
+  "id": "openbroker",
+  "name": "OpenBroker — Hyperliquid Trading",
+  "version": "1.0.0",
+  "description": "Trade on Hyperliquid DEX with background position monitoring",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "privateKey": {
+        "type": "string",
+        "description": "Hyperliquid wallet private key (0x-prefixed). Falls back to HYPERLIQUID_PRIVATE_KEY env var or ~/.openbroker/.env"
+      },
+      "accountAddress": {
+        "type": "string",
+        "description": "Master account address (for API wallets). Falls back to HYPERLIQUID_ACCOUNT_ADDRESS"
+      },
+      "network": {
+        "type": "string",
+        "enum": ["mainnet", "testnet"],
+        "default": "mainnet",
+        "description": "Network to use: mainnet or testnet"
+      },
+      "hooksToken": {
+        "type": "string",
+        "description": "Bearer token for gateway hooks endpoint (must match hooks.token in gateway config). Falls back to OPENCLAW_HOOKS_TOKEN env var."
+      },
+      "watcher": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true,
+            "description": "Enable background position watcher"
+          },
+          "pollIntervalMs": {
+            "type": "number",
+            "default": 30000,
+            "description": "Poll interval in milliseconds"
+          },
+          "pnlChangeThresholdPct": {
+            "type": "number",
+            "default": 5,
+            "description": "Notify when unrealized PnL changes by this percentage"
+          },
+          "marginUsageWarningPct": {
+            "type": "number",
+            "default": 80,
+            "description": "Warn when margin usage exceeds this percentage"
+          },
+          "notifyOnPositionChange": {
+            "type": "boolean",
+            "default": true,
+            "description": "Send hook when positions open/close/change size"
+          },
+          "notifyOnFunding": {
+            "type": "boolean",
+            "default": true,
+            "description": "Send hook for funding rate alerts"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "additionalProperties": false
+  },
+  "uiHints": {
+    "privateKey": {
+      "label": "Private Key",
+      "sensitive": true,
+      "placeholder": "0x..."
+    },
+    "accountAddress": {
+      "label": "Account Address",
+      "placeholder": "0x..."
+    },
+    "network": {
+      "label": "Network",
+      "placeholder": "mainnet"
+    },
+    "hooksToken": {
+      "label": "Hooks Token",
+      "sensitive": true,
+      "placeholder": "your-hooks-secret"
+    }
+  }
+}

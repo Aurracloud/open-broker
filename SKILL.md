@@ -1,11 +1,11 @@
 ---
 name: openbroker
-description: Hyperliquid trading CLI. Execute market orders, limit orders, manage positions, view funding rates, and run trading strategies. Use for any Hyperliquid perp trading task.
+description: Hyperliquid trading plugin with background position monitoring. Execute market orders, limit orders, manage positions, view funding rates, and run trading strategies with automatic alerts for PnL changes and liquidation risk.
 license: MIT
 compatibility: Requires Node.js 22+, network access to api.hyperliquid.xyz
 homepage: https://www.npmjs.com/package/openbroker
-metadata: {"author": "monemetrics", "version": "1.0.41", "openclaw": {"requires": {"bins": ["openbroker"], "env": ["HYPERLIQUID_PRIVATE_KEY"]}, "primaryEnv": "HYPERLIQUID_PRIVATE_KEY", "install": [{"id": "node", "kind": "node", "package": "openbroker", "bins": ["openbroker"], "label": "Install openbroker (npm)"}]}}
-allowed-tools: Bash(openbroker:*) Bash(npm:*) Read
+metadata: {"author": "monemetrics", "version": "1.0.42", "openclaw": {"requires": {"bins": ["openbroker"], "env": ["HYPERLIQUID_PRIVATE_KEY"]}, "primaryEnv": "HYPERLIQUID_PRIVATE_KEY", "install": [{"id": "node", "kind": "node", "package": "openbroker", "bins": ["openbroker"], "label": "Install openbroker (npm)"}]}}
+allowed-tools: ob_account ob_positions ob_funding ob_markets ob_search ob_spot ob_buy ob_sell ob_limit ob_trigger ob_tpsl ob_cancel ob_twap ob_bracket ob_chase ob_watcher_status Bash(openbroker:*)
 ---
 
 # Open Broker - Hyperliquid Trading CLI

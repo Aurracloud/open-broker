@@ -9,6 +9,7 @@ import * as readline from 'readline';
 import { homedir } from 'os';
 
 const OPEN_BROKER_BUILDER_ADDRESS = '0xbb67021fA3e62ab4DA985bb5a55c5c1884381068';
+const OPENBROKER_URL = process.env.OPENBROKER_URL || 'https://openbroker.dev';
 
 // Global config directory: ~/.openbroker/
 const CONFIG_DIR = path.join(homedir(), '.openbroker');
@@ -45,6 +46,190 @@ function ensureConfigDir(): void {
     fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
   }
 }
+
+// ── Polling & verification helpers ──
+
+const POLL_INTERVAL_MS = 3000;
+const POLL_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+
+async function pollForApproval(agentAddress: string): Promise<string | null> {
+  const startTime = Date.now();
+  const statusUrl = `${OPENBROKER_URL}/api/approve-status?agent=${agentAddress}`;
+
+  let dotCount = 0;
+
+  while (Date.now() - startTime < POLL_TIMEOUT_MS) {
+    try {
+      const response = await fetch(statusUrl);
+      const data = await response.json() as { status: string; master?: string };
+
+      if (data.status === 'approved' && data.master) {
+        process.stdout.write('\r' + ' '.repeat(50) + '\r');
+        return data.master;
+      }
+
+      if (data.status === 'expired') {
+        return null;
+      }
+    } catch {
+      // Network error — keep polling
+    }
+
+    dotCount = (dotCount + 1) % 4;
+    process.stdout.write(`\r   Waiting for browser approval${'.'.repeat(dotCount)}${' '.repeat(3 - dotCount)}`);
+
+    await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
+  }
+
+  process.stdout.write('\r' + ' '.repeat(50) + '\r');
+  return null;
+}
+
+async function verifyBuilderFee(masterAddress: string): Promise<boolean> {
+  try {
+    const response = await fetch('https://api.hyperliquid.xyz/info', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        type: 'maxBuilderFee',
+        user: masterAddress.toLowerCase(),
+        builder: OPEN_BROKER_BUILDER_ADDRESS.toLowerCase(),
+      }),
+    });
+    const data = await response.json();
+    return data !== null && data !== 0 && data !== '0';
+  } catch {
+    return false;
+  }
+}
+
+function buildApiWalletEnvContent(privateKey: string, masterAddress: string): string {
+  return `# OpenBroker Configuration (API Wallet)
+# Location: ~/.openbroker/.env
+# WARNING: Keep this file secret! Never share it!
+
+# API wallet private key (can trade, cannot withdraw)
+HYPERLIQUID_PRIVATE_KEY=${privateKey}
+
+# Master account address (the wallet that owns the funds)
+HYPERLIQUID_ACCOUNT_ADDRESS=${masterAddress}
+
+# Network: mainnet or testnet
+HYPERLIQUID_NETWORK=mainnet
+
+# Builder fee (supports openbroker development)
+# Default: 1 bps (0.01%) on trades
+BUILDER_ADDRESS=${OPEN_BROKER_BUILDER_ADDRESS}
+BUILDER_FEE=10
+`;
+}
+
+// ── API wallet setup flow ──
+
+async function setupApiWallet(): Promise<OnboardResult> {
+  console.log('\nGenerating API wallet keypair...');
+  const privateKey = generatePrivateKey();
+  const apiAccount = privateKeyToAccount(privateKey);
+  console.log(`✅ API Wallet Address: ${apiAccount.address}\n`);
+
+  // Save partial config immediately (so the key isn't lost)
+  console.log('Step 2/3: Creating config...');
+  ensureConfigDir();
+
+  // Build the approval URL
+  const approveUrl = `${OPENBROKER_URL}/approve?agent=${apiAccount.address}`;
+
+  console.log(`✅ Config directory ready: ${CONFIG_DIR}\n`);
+
+  console.log('Step 3/3: Master wallet approval');
+  console.log('================================\n');
+  console.log('Your API wallet needs to be authorized by a master wallet.');
+  console.log('Open this URL in your browser and connect your master wallet:\n');
+  console.log(`  ${approveUrl}\n`);
+  console.log('The master wallet will sign two transactions:');
+  console.log('  1. ApproveAgent  — authorizes this API wallet to trade');
+  console.log('  2. ApproveBuilderFee — approves the 1 bps builder fee\n');
+
+  // Poll for approval
+  const masterAddress = await pollForApproval(apiAccount.address);
+
+  if (!masterAddress) {
+    console.log('\n⚠️  Approval timed out or was not completed.');
+    console.log(`   You can retry by visiting: ${approveUrl}`);
+    console.log('   After approval, re-run: openbroker setup\n');
+
+    // Save config without master address so user can manually add it later
+    const partialEnv = `# OpenBroker Configuration (API Wallet — INCOMPLETE)
+# Location: ~/.openbroker/.env
+# WARNING: Keep this file secret! Never share it!
+# NOTE: Approval not completed. Re-run "openbroker setup" after approving.
+
+# API wallet private key
+HYPERLIQUID_PRIVATE_KEY=${privateKey}
+
+# TODO: Set this after approving at ${approveUrl}
+# HYPERLIQUID_ACCOUNT_ADDRESS=0x...
+
+HYPERLIQUID_NETWORK=mainnet
+BUILDER_ADDRESS=${OPEN_BROKER_BUILDER_ADDRESS}
+BUILDER_FEE=10
+`;
+    fs.writeFileSync(CONFIG_PATH, partialEnv, { mode: 0o600 });
+    console.log(`   Partial config saved to: ${CONFIG_PATH}`);
+
+    return { success: false, error: 'Approval not completed' };
+  }
+
+  console.log(`\n✅ Master wallet detected: ${masterAddress}`);
+
+  // Verify on-chain
+  console.log('   Verifying builder fee approval...');
+  const feeApproved = await verifyBuilderFee(masterAddress);
+
+  if (feeApproved) {
+    console.log('   ✅ Builder fee: approved on-chain');
+  } else {
+    console.log('   ⚠️  Builder fee not yet confirmed on-chain (may take a moment)');
+  }
+
+  // Save complete config
+  const envContent = buildApiWalletEnvContent(privateKey, masterAddress);
+  fs.writeFileSync(CONFIG_PATH, envContent, { mode: 0o600 });
+  console.log(`\n✅ Config saved to: ${CONFIG_PATH}`);
+
+  // Final summary
+  console.log('\n========================================');
+  console.log('           SETUP COMPLETE!             ');
+  console.log('========================================\n');
+
+  console.log('API Wallet Setup');
+  console.log('-----------------');
+  console.log(`API Wallet:     ${apiAccount.address}`);
+  console.log(`Master Account: ${masterAddress}`);
+  console.log(`Network:        Hyperliquid (Mainnet)`);
+  console.log(`Config:         ${CONFIG_PATH}`);
+
+  console.log('\n📋 Next Steps');
+  console.log('--------------');
+  console.log('1. Ensure your master wallet is funded on Hyperliquid');
+  console.log('2. Start trading:');
+  console.log('   openbroker account');
+  console.log('   openbroker buy --coin ETH --size 0.01 --dry');
+
+  console.log('\n⚠️  Security');
+  console.log('------------');
+  console.log('This API wallet can trade but CANNOT withdraw funds.');
+  console.log('You can revoke access at any time from app.hyperliquid.xyz');
+  console.log(`Config stored at: ${CONFIG_PATH}`);
+
+  return {
+    success: true,
+    walletAddress: apiAccount.address,
+    privateKey: privateKey,
+  };
+}
+
+// ── Main ──
 
 async function main(): Promise<OnboardResult> {
   console.log('OpenBroker - One-Command Setup');
@@ -84,32 +269,44 @@ async function main(): Promise<OnboardResult> {
     };
   }
 
-  // Ask user if they have an existing private key
+  // Ask user which setup mode
   const rl = createReadline();
 
   console.log('Step 1/3: Wallet Setup');
   console.log('----------------------');
-  console.log('Do you have an existing Hyperliquid private key?\n');
-  console.log('  1) Yes, I have a private key ready');
-  console.log('  2) No, generate a new wallet for me\n');
+  console.log('How would you like to set up your wallet?\n');
+  console.log('  1) Import existing private key (master wallet)');
+  console.log('  2) Generate a new wallet (master wallet)');
+  console.log('  3) Generate API wallet (recommended for agents)');
+  console.log('     Safer: can trade but cannot withdraw funds.');
+  console.log('     Requires browser approval from your master wallet.\n');
 
   let choice = '';
-  while (choice !== '1' && choice !== '2') {
-    choice = await prompt(rl, 'Enter choice (1 or 2): ');
-    if (choice !== '1' && choice !== '2') {
-      console.log('Please enter 1 or 2');
+  while (choice !== '1' && choice !== '2' && choice !== '3') {
+    choice = await prompt(rl, 'Enter choice (1, 2, or 3): ');
+    if (choice !== '1' && choice !== '2' && choice !== '3') {
+      console.log('Please enter 1, 2, or 3');
     }
   }
 
+  rl.close();
+
+  // Option 3: API wallet flow
+  if (choice === '3') {
+    return setupApiWallet();
+  }
+
+  // Options 1 & 2: Master wallet flow
   let privateKey: `0x${string}`;
 
   if (choice === '1') {
     // User has existing key
+    const rl2 = createReadline();
     console.log('\nEnter your private key (0x... format):\n');
 
     let validKey = false;
     while (!validKey) {
-      const inputKey = await prompt(rl, 'Private key: ');
+      const inputKey = await prompt(rl2, 'Private key: ');
 
       if (isValidPrivateKey(inputKey)) {
         privateKey = inputKey as `0x${string}`;
@@ -119,6 +316,7 @@ async function main(): Promise<OnboardResult> {
         console.log('Example: 0x1234...abcd (66 characters total)\n');
       }
     }
+    rl2.close();
 
     console.log('\n✅ Private key accepted');
   } else {
@@ -127,8 +325,6 @@ async function main(): Promise<OnboardResult> {
     privateKey = generatePrivateKey();
     console.log('✅ New wallet created');
   }
-
-  rl.close();
 
   // Derive account from private key
   const account = privateKeyToAccount(privateKey);

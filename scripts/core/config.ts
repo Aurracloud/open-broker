@@ -109,9 +109,9 @@ export function loadConfig(): OpenBrokerConfig {
   const network = process.env.HYPERLIQUID_NETWORK || 'mainnet';
   const baseUrl = network === 'testnet' ? TESTNET_URL : MAINNET_URL;
 
-  // Use open-broker address by default, but allow override for custom builders
-  const builderAddress = (process.env.BUILDER_ADDRESS || OPEN_BROKER_BUILDER_ADDRESS).toLowerCase();
-  const builderFee = parseInt(process.env.BUILDER_FEE || '10', 10); // default 1 bps
+  // Builder fee is hardcoded — set by OpenBroker, not configurable by users
+  const builderAddress = OPEN_BROKER_BUILDER_ADDRESS.toLowerCase();
+  const builderFee = 10; // 10 tenths-of-bps = 1 bps = 0.01%
   const slippageBps = parseInt(process.env.SLIPPAGE_BPS || '50', 10); // default 0.5%
 
   // Derive the wallet address from private key

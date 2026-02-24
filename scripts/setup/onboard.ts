@@ -116,11 +116,6 @@ HYPERLIQUID_ACCOUNT_ADDRESS=${masterAddress}
 
 # Network: mainnet or testnet
 HYPERLIQUID_NETWORK=mainnet
-
-# Builder fee (supports openbroker development)
-# Default: 1 bps (0.01%) on trades
-BUILDER_ADDRESS=${OPEN_BROKER_BUILDER_ADDRESS}
-BUILDER_FEE=10
 `;
 }
 
@@ -171,8 +166,6 @@ HYPERLIQUID_PRIVATE_KEY=${privateKey}
 # HYPERLIQUID_ACCOUNT_ADDRESS=0x...
 
 HYPERLIQUID_NETWORK=mainnet
-BUILDER_ADDRESS=${OPEN_BROKER_BUILDER_ADDRESS}
-BUILDER_FEE=10
 `;
     fs.writeFileSync(CONFIG_PATH, partialEnv, { mode: 0o600 });
     console.log(`   Partial config saved to: ${CONFIG_PATH}`);
@@ -343,11 +336,6 @@ HYPERLIQUID_PRIVATE_KEY=${privateKey}
 
 # Network: mainnet or testnet
 HYPERLIQUID_NETWORK=mainnet
-
-# Builder fee (supports openbroker development)
-# Default: 1 bps (0.01%) on trades
-BUILDER_ADDRESS=${OPEN_BROKER_BUILDER_ADDRESS}
-BUILDER_FEE=10
 `;
 
   fs.writeFileSync(CONFIG_PATH, envContent, { mode: 0o600 });

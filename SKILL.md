@@ -39,10 +39,33 @@ openbroker setup              # One-command setup (wallet + config + builder app
 openbroker approve-builder --check  # Check builder fee status (for troubleshooting)
 ```
 
-The `setup` command handles everything:
-1. Generate new wallet or use existing private key
-2. Save config to `~/.openbroker/.env`
-3. Automatically approve builder fee (required for trading)
+The `setup` command offers three modes:
+1. **Import existing key** — use a private key you already have (master wallet)
+2. **Generate new wallet** — create a fresh master wallet
+3. **Generate API wallet** (recommended for agents) — creates a restricted wallet that can trade but cannot withdraw
+
+For options 1 and 2, setup saves config and approves the builder fee automatically.
+For option 3 (API wallet), see the API Wallet Setup section below.
+
+### API Wallet Setup (Recommended for Agents)
+
+API wallets can place trades on behalf of a master account but **cannot withdraw funds**. This is the safest option for automated agents.
+
+**Flow:**
+1. Run `openbroker setup` and choose option 3 ("Generate API wallet")
+2. The CLI generates a keypair and prints an approval URL (e.g. `https://openbroker.dev/approve?agent=0xABC...`)
+3. The agent owner opens the URL in a browser and connects their master wallet (MetaMask etc.)
+4. The master wallet signs two transactions: `ApproveAgent` (authorizes the API wallet) and `ApproveBuilderFee` (approves the 1 bps fee)
+5. The CLI detects the approval automatically and saves the config
+
+**After setup, the config will contain:**
+```
+HYPERLIQUID_PRIVATE_KEY=0x...        # API wallet private key
+HYPERLIQUID_ACCOUNT_ADDRESS=0x...    # Master account address
+HYPERLIQUID_NETWORK=mainnet
+```
+
+**Important for agents:** When using an API wallet, pass the approval URL to the agent owner (the human who controls the master wallet). The owner must approve in a browser before the agent can trade. The CLI waits up to 10 minutes for the approval. If it times out, re-run `openbroker setup`.
 
 ### Account Info
 ```bash
@@ -294,7 +317,9 @@ Run `openbroker setup` to create the global config interactively.
 |----------|----------|-------------|
 | `HYPERLIQUID_PRIVATE_KEY` | Yes | Wallet private key (0x...) |
 | `HYPERLIQUID_NETWORK` | No | `mainnet` (default) or `testnet` |
-| `HYPERLIQUID_ACCOUNT_ADDRESS` | No | For API wallets |
+| `HYPERLIQUID_ACCOUNT_ADDRESS` | No | Master account address (required for API wallets) |
+
+The builder fee (1 bps / 0.01%) is hardcoded and not configurable.
 
 ## Risk Warning
 

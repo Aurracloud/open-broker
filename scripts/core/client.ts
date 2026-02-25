@@ -553,6 +553,44 @@ export class HyperliquidClient {
     }
   }
 
+  /**
+   * Get user funding ledger updates
+   * Returns array of funding payments received/paid per position
+   */
+  async getUserFunding(user?: string, startTime?: number, endTime?: number): Promise<Array<{
+    time: number;
+    hash: string;
+    delta: {
+      type: 'funding';
+      coin: string;
+      usdc: string;
+      szi: string;
+      fundingRate: string;
+      nSamples: number | null;
+    };
+  }>> {
+    this.log('Fetching userFunding for:', user ?? this.address);
+    const baseUrl = isMainnet()
+      ? 'https://api.hyperliquid.xyz'
+      : 'https://api.hyperliquid-testnet.xyz';
+
+    const body: Record<string, unknown> = {
+      type: 'userFunding',
+      user: user ?? this.address,
+    };
+    if (startTime !== undefined) body.startTime = startTime;
+    if (endTime !== undefined) body.endTime = endTime;
+
+    const response = await fetch(baseUrl + '/info', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await response.json();
+    this.log('userFunding response length:', data?.length);
+    return data;
+  }
+
   async getUserState(user?: string): Promise<ClearinghouseState> {
     this.log('Fetching clearinghouseState for:', user ?? this.address);
     const response = await this.info.clearinghouseState({ user: user ?? this.address });

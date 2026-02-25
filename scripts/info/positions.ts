@@ -13,8 +13,11 @@ async function main() {
   console.log('=======================\n');
 
   try {
-    const state = await client.getUserState();
-    const mids = await client.getAllMids();
+    const [state, mids, fundingHistory] = await Promise.all([
+      client.getUserState(),
+      client.getAllMids(),
+      client.getUserFunding(),
+    ]);
 
     const positions = state.assetPositions.filter(ap => {
       const size = parseFloat(ap.position.szi);
@@ -26,6 +29,14 @@ async function main() {
     if (positions.length === 0) {
       console.log(filterCoin ? `No position in ${filterCoin}` : 'No open positions');
       return;
+    }
+
+    // Sum cumulative funding per coin
+    const fundingByCoin = new Map<string, number>();
+    for (const entry of fundingHistory) {
+      const coin = entry.delta.coin;
+      const usdc = parseFloat(entry.delta.usdc);
+      fundingByCoin.set(coin, (fundingByCoin.get(coin) ?? 0) + usdc);
     }
 
     for (const ap of positions) {
@@ -40,6 +51,7 @@ async function main() {
       const markPx = parseFloat(mids[pos.coin] || '0');
       const side = size > 0 ? 'LONG' : 'SHORT';
       const sideEmoji = size > 0 ? '+' : '-';
+      const cumulativeFunding = fundingByCoin.get(pos.coin) ?? 0;
 
       console.log(`${pos.coin} - ${side}`);
       console.log('─'.repeat(40));
@@ -48,6 +60,7 @@ async function main() {
       console.log(`Mark Price:     ${formatUsd(markPx)}`);
       console.log(`Notional:       ${formatUsd(Math.abs(notional))}`);
       console.log(`Unrealized PnL: ${formatUsd(pnl)} (${formatPercent(roe)})`);
+      console.log(`Cum. Funding:   ${formatUsd(cumulativeFunding)}${cumulativeFunding >= 0 ? ' (received)' : ' (paid)'}`);
       console.log(`Margin Used:    ${formatUsd(marginUsed)}`);
       console.log(`Leverage:       ${pos.leverage.value}x (${pos.leverage.type})`);
 
@@ -62,6 +75,7 @@ async function main() {
     }
 
     // Summary
+    const totalFunding = Array.from(fundingByCoin.values()).reduce((sum, v) => sum + v, 0);
     if (positions.length > 1) {
       const totalPnl = positions.reduce(
         (sum, ap) => sum + parseFloat(ap.position.unrealizedPnl),
@@ -77,6 +91,7 @@ async function main() {
       console.log(`Total Positions: ${positions.length}`);
       console.log(`Total Notional:  ${formatUsd(totalNotional)}`);
       console.log(`Total PnL:       ${formatUsd(totalPnl)}`);
+      console.log(`Total Funding:   ${formatUsd(totalFunding)}${totalFunding >= 0 ? ' (received)' : ' (paid)'}`);
     }
 
   } catch (error) {

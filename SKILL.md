@@ -4,7 +4,7 @@ description: Hyperliquid trading plugin with background position monitoring. Exe
 license: MIT
 compatibility: Requires Node.js 22+, network access to api.hyperliquid.xyz
 homepage: https://www.npmjs.com/package/openbroker
-metadata: {"author": "monemetrics", "version": "1.0.42", "openclaw": {"requires": {"bins": ["openbroker"], "env": ["HYPERLIQUID_PRIVATE_KEY"]}, "primaryEnv": "HYPERLIQUID_PRIVATE_KEY", "install": [{"id": "node", "kind": "node", "package": "openbroker", "bins": ["openbroker"], "label": "Install openbroker (npm)"}]}}
+metadata: {"author": "monemetrics", "version": "1.0.43", "openclaw": {"requires": {"bins": ["openbroker"], "env": ["HYPERLIQUID_PRIVATE_KEY"]}, "primaryEnv": "HYPERLIQUID_PRIVATE_KEY", "install": [{"id": "node", "kind": "node", "package": "openbroker", "bins": ["openbroker"], "label": "Install openbroker (npm)"}]}}
 allowed-tools: ob_account ob_positions ob_funding ob_markets ob_search ob_spot ob_buy ob_sell ob_limit ob_trigger ob_tpsl ob_cancel ob_twap ob_bracket ob_chase ob_watcher_status Bash(openbroker:*)
 ---
 
@@ -320,6 +320,53 @@ Run `openbroker setup` to create the global config interactively.
 | `HYPERLIQUID_ACCOUNT_ADDRESS` | No | Master account address (required for API wallets) |
 
 The builder fee (1 bps / 0.01%) is hardcoded and not configurable.
+
+## OpenClaw Plugin (Optional)
+
+This skill works standalone via Bash — every command above runs through the `openbroker` CLI. For enhanced features, the same `openbroker` npm package also ships as an **OpenClaw plugin** that you can enable alongside this skill.
+
+### What the plugin adds
+
+- **Structured agent tools** (`ob_account`, `ob_buy`, `ob_limit`, etc.) — typed tool calls with proper input schemas instead of Bash strings. The agent gets structured JSON responses.
+- **Background position watcher** — polls your Hyperliquid account every 30s and sends webhook alerts when positions open/close, PnL moves significantly, or margin usage gets dangerous.
+- **CLI commands** — `openclaw ob status` and `openclaw ob watch` for inspecting the watcher.
+
+### Enable the plugin
+
+The plugin is bundled in the same `openbroker` npm package. To enable it in your OpenClaw config:
+
+```yaml
+plugins:
+  entries:
+    openbroker:
+      enabled: true
+      config:
+        hooksToken: "your-hooks-secret"   # Required for watcher alerts
+        watcher:
+          enabled: true
+          pollIntervalMs: 30000
+          pnlChangeThresholdPct: 5
+          marginUsageWarningPct: 80
+```
+
+The plugin reads wallet credentials from `~/.openbroker/.env` (set up by `openbroker setup`), so you don't need to duplicate `privateKey` in the plugin config unless you want to override.
+
+### Webhook setup for watcher alerts
+
+For position alerts to reach the agent, enable hooks in your gateway config:
+
+```yaml
+hooks:
+  enabled: true
+  token: "your-hooks-secret"   # Must match hooksToken above
+```
+
+Without hooks, the watcher still runs and tracks state (accessible via `ob_watcher_status`), but it can't wake the agent.
+
+### Using with or without the plugin
+
+- **Skill only (no plugin):** Use Bash commands (`openbroker buy --coin ETH --size 0.1`). No background monitoring.
+- **Skill + plugin:** The agent prefers the `ob_*` tools when available (structured data), falls back to Bash for commands not covered by tools (strategies, scale). Background watcher sends alerts automatically.
 
 ## Risk Warning
 

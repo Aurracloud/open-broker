@@ -559,6 +559,105 @@ openbroker approve-builder --max-fee "0.05%"  # Custom max fee
 | `--builder` | Custom builder address (advanced) | Open Broker |
 | `--verbose` | Show debug output | — |
 
+## OpenClaw Plugin
+
+OpenBroker ships as an [OpenClaw](https://openclaw.ai) plugin. When installed via OpenClaw, it registers structured agent tools and a background position watcher — no Bash wrappers needed.
+
+### Install via OpenClaw
+
+```bash
+openclaw plugins install openbroker
+```
+
+Or install from a local checkout during development:
+
+```bash
+openclaw plugins install -l ./open-broker-mvp
+```
+
+After installation, run `openbroker setup` to configure your wallet (same onboarding as the standalone CLI).
+
+### Plugin Tools
+
+When loaded, the plugin registers these agent tools:
+
+| Category | Tool | Description |
+|----------|------|-------------|
+| Info | `ob_account` | Account balance, equity, margin, open orders |
+| Info | `ob_positions` | Open positions with PnL, leverage, liquidation price |
+| Info | `ob_funding` | Funding rates sorted by annualized rate |
+| Info | `ob_markets` | Market data (price, volume, OI) |
+| Info | `ob_search` | Search assets across perps, HIP-3, and spot |
+| Info | `ob_spot` | Spot markets and token balances |
+| Trading | `ob_buy` | Market buy |
+| Trading | `ob_sell` | Market sell |
+| Trading | `ob_limit` | Limit order (GTC, IOC, ALO) |
+| Trading | `ob_trigger` | Trigger order (TP/SL) |
+| Trading | `ob_tpsl` | Set TP/SL on existing position |
+| Trading | `ob_cancel` | Cancel orders |
+| Advanced | `ob_twap` | TWAP execution |
+| Advanced | `ob_bracket` | Entry + TP + SL |
+| Advanced | `ob_chase` | Chase price with ALO orders |
+| Monitoring | `ob_watcher_status` | Background watcher state |
+
+### Background Position Watcher
+
+The plugin runs a background service that polls your Hyperliquid account every 30 seconds and sends webhook notifications when:
+
+- **Position opened** — new position detected
+- **Position closed** — position removed
+- **Size changed** — position increased or decreased
+- **PnL threshold** — unrealized PnL changed by more than the configured % (default: 5%)
+- **Margin warning** — margin usage exceeds threshold (default: 80%)
+
+### Plugin Configuration
+
+Configure in your OpenClaw settings under `plugins.entries.openbroker.config`:
+
+```json
+{
+  "privateKey": "0x...",
+  "accountAddress": "0x...",
+  "network": "mainnet",
+  "hooksToken": "your-hooks-secret",
+  "watcher": {
+    "enabled": true,
+    "pollIntervalMs": 30000,
+    "pnlChangeThresholdPct": 5,
+    "marginUsageWarningPct": 80,
+    "notifyOnPositionChange": true,
+    "notifyOnFunding": true
+  }
+}
+```
+
+All fields are optional — the plugin falls back to `~/.openbroker/.env` and environment variables.
+
+### OpenClaw Webhook Setup
+
+For the position watcher to notify your agent, you need webhooks enabled in your OpenClaw gateway config:
+
+```yaml
+hooks:
+  enabled: true
+  token: "your-hooks-secret"   # Must match hooksToken in plugin config
+```
+
+The watcher sends alerts to `POST /hooks/agent` with `wakeMode: "now"`, which triggers an immediate agent turn. The agent receives a message like:
+
+```
+Position alert: ETH unrealized PnL changed from +$500 to -$200 (-140%).
+```
+
+### CLI Commands
+
+The plugin also registers CLI commands accessible via the OpenClaw CLI:
+
+```bash
+openclaw ob status    # Show watcher state and current positions
+openclaw ob watch     # Run watcher in foreground (debugging)
+```
+
 ## Development
 
 For local development without global install:

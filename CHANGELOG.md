@@ -2,6 +2,32 @@
 
 All notable changes to Open Broker will be documented in this file.
 
+## [1.0.44] - 2026-02-25
+
+### Added
+- **Trade Fills**: New `fills` command to view trade fill history with prices, fees, and realized PnL
+- **Order History**: New `orders` command to view all historical orders (filled, canceled, open, triggered, rejected)
+- **Order Status**: New `order-status` command to check the status of a specific order by OID or CLOID
+- **Fee Schedule**: New `fees` command to view fee tier, maker/taker rates, referral/staking discounts, and daily volumes
+- **Candle Data**: New `candles` command to view OHLCV candlestick data with configurable intervals and bar counts
+- **Funding History**: New `funding-history` command to view historical funding rates for any asset
+- **Recent Trades**: New `trades` command to view the tape (time & sales) for an asset with buy/sell volume breakdown
+- **Rate Limit**: New `rate-limit` command to check API rate limit usage, capacity, and cumulative volume
+- **Cumulative Funding on Positions**: The `positions` command now shows cumulative funding received/paid per position
+- **Client Extensions**: Added 9 new methods to HyperliquidClient
+  - `getUserFunding()` - Funding ledger updates
+  - `getUserFills()` - Trade fill history
+  - `getHistoricalOrders()` - All orders with statuses
+  - `getOrderStatus()` - Single order lookup
+  - `getUserFees()` - Fee schedule and volume
+  - `getCandleSnapshot()` - OHLCV candle data
+  - `getFundingHistory()` - Historical funding rates per asset
+  - `getRecentTrades()` - Recent trades for an asset
+  - `getUserRateLimit()` - API rate limit status
+- **Plugin Tools**: Added 8 new OpenClaw plugin tools
+  - `ob_fills`, `ob_orders`, `ob_order_status`, `ob_fees`
+  - `ob_candles`, `ob_funding_history`, `ob_trades`, `ob_rate_limit`
+
 ## [1.0.37] - 2025-02-08
 - **Detailed Docs**: Adding detailed docs for all sub commands
 

@@ -275,6 +275,331 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
       },
     },
 
+    {
+      name: 'ob_fills',
+      description: 'View trade fill history with prices, fees, and realized PnL',
+      parameters: {
+        type: 'object',
+        properties: {
+          coin: { type: 'string', description: 'Filter by coin symbol (e.g. ETH, BTC)' },
+          side: { type: 'string', enum: ['buy', 'sell'], description: 'Filter by side' },
+          top: { type: 'number', description: 'Number of recent fills to return (default: 20)' },
+        },
+      },
+      async execute(_id, params) {
+        const { getClient } = await import('../core/client.js');
+        const client = getClient();
+        let fills = await client.getUserFills();
+
+        if (params.coin) {
+          const coin = (params.coin as string).toUpperCase();
+          fills = fills.filter(f => f.coin === coin);
+        }
+        if (params.side) {
+          const sideCode = (params.side as string) === 'buy' ? 'B' : 'A';
+          fills = fills.filter(f => f.side === sideCode);
+        }
+
+        fills.sort((a, b) => b.time - a.time);
+        const top = (params.top as number) || 20;
+        fills = fills.slice(0, top);
+
+        const totalFees = fills.reduce((s, f) => s + parseFloat(f.fee), 0);
+        const totalPnl = fills.reduce((s, f) => s + parseFloat(f.closedPnl), 0);
+
+        return json({
+          address: client.address,
+          fills: fills.map(f => ({
+            coin: f.coin,
+            side: f.side === 'B' ? 'buy' : 'sell',
+            size: f.sz,
+            price: f.px,
+            fee: f.fee,
+            closedPnl: f.closedPnl,
+            time: f.time,
+            oid: f.oid,
+            crossed: f.crossed,
+          })),
+          totalFees: String(totalFees),
+          totalClosedPnl: String(totalPnl),
+        });
+      },
+    },
+
+    {
+      name: 'ob_orders',
+      description: 'View order history with status (filled, canceled, open, etc.)',
+      parameters: {
+        type: 'object',
+        properties: {
+          coin: { type: 'string', description: 'Filter by coin symbol' },
+          status: { type: 'string', description: 'Filter by status (filled, canceled, open, etc.)' },
+          top: { type: 'number', description: 'Number of recent orders (default: 20)' },
+        },
+      },
+      async execute(_id, params) {
+        const { getClient } = await import('../core/client.js');
+        const client = getClient();
+        let orders = await client.getHistoricalOrders();
+
+        if (params.coin) {
+          const coin = (params.coin as string).toUpperCase();
+          orders = orders.filter(o => o.order.coin === coin);
+        }
+        if (params.status) {
+          const s = (params.status as string).toLowerCase();
+          orders = orders.filter(o => o.status.toLowerCase().includes(s));
+        }
+
+        orders.sort((a, b) => b.order.timestamp - a.order.timestamp);
+        const top = (params.top as number) || 20;
+        orders = orders.slice(0, top);
+
+        return json({
+          address: client.address,
+          orders: orders.map(e => ({
+            coin: e.order.coin,
+            side: e.order.side === 'B' ? 'buy' : 'sell',
+            size: e.order.sz,
+            origSize: e.order.origSz,
+            price: e.order.limitPx,
+            orderType: e.order.orderType,
+            tif: e.order.tif,
+            oid: e.order.oid,
+            status: e.status,
+            timestamp: e.order.timestamp,
+            statusTimestamp: e.statusTimestamp,
+            reduceOnly: e.order.reduceOnly,
+            isTrigger: e.order.isTrigger,
+            triggerPx: e.order.triggerPx,
+          })),
+        });
+      },
+    },
+
+    {
+      name: 'ob_order_status',
+      description: 'Check the status of a specific order by order ID',
+      parameters: {
+        type: 'object',
+        properties: {
+          oid: { type: 'number', description: 'Order ID to check' },
+        },
+        required: ['oid'],
+      },
+      async execute(_id, params) {
+        const { getClient } = await import('../core/client.js');
+        const client = getClient();
+        const result = await client.getOrderStatus(params.oid as number);
+
+        if (result.status === 'unknownOid') {
+          return json({ found: false, oid: params.oid });
+        }
+
+        if (result.order) {
+          const o = result.order.order;
+          return json({
+            found: true,
+            coin: o.coin,
+            side: o.side === 'B' ? 'buy' : 'sell',
+            size: o.sz,
+            origSize: o.origSz,
+            price: o.limitPx,
+            orderType: o.orderType,
+            tif: o.tif,
+            oid: o.oid,
+            status: result.order.status,
+            timestamp: o.timestamp,
+            statusTimestamp: result.order.statusTimestamp,
+            reduceOnly: o.reduceOnly,
+            isTrigger: o.isTrigger,
+            triggerPx: o.triggerPx,
+          });
+        }
+
+        return json(result);
+      },
+    },
+
+    {
+      name: 'ob_fees',
+      description: 'View fee schedule, tier, maker/taker rates, and recent daily trading volumes',
+      parameters: {
+        type: 'object',
+        properties: {},
+      },
+      async execute() {
+        const { getClient } = await import('../core/client.js');
+        const client = getClient();
+        const fees = await client.getUserFees();
+
+        return json({
+          address: client.address,
+          perpTakerRate: fees.userCrossRate,
+          perpMakerRate: fees.userAddRate,
+          spotTakerRate: fees.userSpotCrossRate,
+          spotMakerRate: fees.userSpotAddRate,
+          referralDiscount: fees.activeReferralDiscount,
+          stakingDiscount: fees.activeStakingDiscount,
+          recentVolume: fees.dailyUserVlm?.slice(-7),
+        });
+      },
+    },
+
+    {
+      name: 'ob_candles',
+      description: 'Get OHLCV candle data for an asset',
+      parameters: {
+        type: 'object',
+        properties: {
+          coin: { type: 'string', description: 'Asset symbol (e.g. ETH, BTC)' },
+          interval: { type: 'string', description: 'Candle interval: 1m, 5m, 15m, 1h, 4h, 1d, etc. (default: 1h)' },
+          bars: { type: 'number', description: 'Number of bars to fetch (default: 24)' },
+        },
+        required: ['coin'],
+      },
+      async execute(_id, params) {
+        const { getClient } = await import('../core/client.js');
+        const client = getClient();
+
+        const coin = (params.coin as string).toUpperCase();
+        const interval = (params.interval as string) || '1h';
+        const bars = (params.bars as number) || 24;
+
+        const intervalMs: Record<string, number> = {
+          '1m': 60_000, '3m': 180_000, '5m': 300_000, '15m': 900_000, '30m': 1_800_000,
+          '1h': 3_600_000, '2h': 7_200_000, '4h': 14_400_000, '8h': 28_800_000, '12h': 43_200_000,
+          '1d': 86_400_000, '3d': 259_200_000, '1w': 604_800_000, '1M': 2_592_000_000,
+        };
+
+        const now = Date.now();
+        const startTime = now - (bars * (intervalMs[interval] || 3_600_000));
+        const candles = await client.getCandleSnapshot(coin, interval, startTime);
+
+        return json({
+          coin,
+          interval,
+          candles: candles.map(c => ({
+            time: c.t,
+            open: c.o,
+            high: c.h,
+            low: c.l,
+            close: c.c,
+            volume: c.v,
+            trades: c.n,
+          })),
+        });
+      },
+    },
+
+    {
+      name: 'ob_funding_history',
+      description: 'Get historical funding rates for an asset over a time period',
+      parameters: {
+        type: 'object',
+        properties: {
+          coin: { type: 'string', description: 'Asset symbol (e.g. ETH, BTC)' },
+          hours: { type: 'number', description: 'Hours of history (default: 24)' },
+        },
+        required: ['coin'],
+      },
+      async execute(_id, params) {
+        const { getClient } = await import('../core/client.js');
+        const { annualizeFundingRate } = await import('../core/utils.js');
+        const client = getClient();
+
+        const coin = (params.coin as string).toUpperCase();
+        const hours = (params.hours as number) || 24;
+        const startTime = Date.now() - (hours * 3_600_000);
+
+        const history = await client.getFundingHistory(coin, startTime);
+
+        const rates = history.map(e => parseFloat(e.fundingRate));
+        const avgRate = rates.length > 0 ? rates.reduce((a, b) => a + b, 0) / rates.length : 0;
+
+        return json({
+          coin,
+          hours,
+          samples: history.length,
+          avgHourlyRate: String(avgRate),
+          avgAnnualizedRate: String(annualizeFundingRate(avgRate)),
+          history: history.map(e => ({
+            time: e.time,
+            fundingRate: e.fundingRate,
+            premium: e.premium,
+          })),
+        });
+      },
+    },
+
+    {
+      name: 'ob_trades',
+      description: 'Get recent trades (tape/time & sales) for an asset',
+      parameters: {
+        type: 'object',
+        properties: {
+          coin: { type: 'string', description: 'Asset symbol (e.g. ETH, BTC)' },
+          top: { type: 'number', description: 'Number of trades (default: 30)' },
+        },
+        required: ['coin'],
+      },
+      async execute(_id, params) {
+        const { getClient } = await import('../core/client.js');
+        const client = getClient();
+
+        const coin = (params.coin as string).toUpperCase();
+        let trades = await client.getRecentTrades(coin);
+
+        trades.sort((a, b) => b.time - a.time);
+        const top = (params.top as number) || 30;
+        trades = trades.slice(0, top);
+
+        let buyVol = 0;
+        let sellVol = 0;
+        for (const t of trades) {
+          const ntl = parseFloat(t.px) * parseFloat(t.sz);
+          if (t.side === 'B') buyVol += ntl;
+          else sellVol += ntl;
+        }
+
+        return json({
+          coin,
+          trades: trades.map(t => ({
+            side: t.side === 'B' ? 'buy' : 'sell',
+            size: t.sz,
+            price: t.px,
+            time: t.time,
+          })),
+          totalVolume: String(buyVol + sellVol),
+          buyVolume: String(buyVol),
+          sellVolume: String(sellVol),
+        });
+      },
+    },
+
+    {
+      name: 'ob_rate_limit',
+      description: 'Check API rate limit usage, capacity, and cumulative trading volume',
+      parameters: {
+        type: 'object',
+        properties: {},
+      },
+      async execute() {
+        const { getClient } = await import('../core/client.js');
+        const client = getClient();
+        const rl = await client.getUserRateLimit();
+
+        return json({
+          address: client.address,
+          requestsUsed: rl.nRequestsUsed,
+          requestsCap: rl.nRequestsCap,
+          requestsSurplus: rl.nRequestsSurplus,
+          usagePercent: rl.nRequestsCap > 0 ? (rl.nRequestsUsed / rl.nRequestsCap * 100).toFixed(1) + '%' : '0%',
+          cumulativeVolume: rl.cumVlm,
+        });
+      },
+    },
+
     // ── Trading Tools ───────────────────────────────────────────
 
     {

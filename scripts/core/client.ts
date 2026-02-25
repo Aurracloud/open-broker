@@ -591,6 +591,296 @@ export class HyperliquidClient {
     return data;
   }
 
+  /**
+   * Get user trade fills
+   */
+  async getUserFills(user?: string, aggregateByTime?: boolean): Promise<Array<{
+    coin: string;
+    px: string;
+    sz: string;
+    side: 'B' | 'A';
+    time: number;
+    startPosition: string;
+    dir: string;
+    closedPnl: string;
+    fee: string;
+    hash: string;
+    oid: number;
+    tid: number;
+    crossed: boolean;
+    feeToken: string;
+    twapId: number | null;
+    cloid: string | null;
+    builderFee: string | null;
+  }>> {
+    this.log('Fetching userFills for:', user ?? this.address);
+    const baseUrl = isMainnet()
+      ? 'https://api.hyperliquid.xyz'
+      : 'https://api.hyperliquid-testnet.xyz';
+
+    const body: Record<string, unknown> = {
+      type: 'userFills',
+      user: user ?? this.address,
+    };
+    if (aggregateByTime !== undefined) body.aggregateByTime = aggregateByTime;
+
+    const response = await fetch(baseUrl + '/info', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await response.json();
+    this.log('userFills response length:', data?.length);
+    return data;
+  }
+
+  /**
+   * Get historical orders (all statuses)
+   */
+  async getHistoricalOrders(user?: string): Promise<Array<{
+    order: {
+      coin: string;
+      side: string;
+      limitPx: string;
+      sz: string;
+      origSz: string;
+      oid: number;
+      timestamp: number;
+      orderType: string;
+      tif: string | null;
+      cloid: string | null;
+      triggerCondition: string;
+      triggerPx: string;
+      isTrigger: boolean;
+      isPositionTpsl: boolean;
+      reduceOnly: boolean;
+      children: unknown[];
+    };
+    status: string;
+    statusTimestamp: number;
+  }>> {
+    this.log('Fetching historicalOrders for:', user ?? this.address);
+    const baseUrl = isMainnet()
+      ? 'https://api.hyperliquid.xyz'
+      : 'https://api.hyperliquid-testnet.xyz';
+
+    const response = await fetch(baseUrl + '/info', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        type: 'historicalOrders',
+        user: user ?? this.address,
+      }),
+    });
+    const data = await response.json();
+    this.log('historicalOrders response length:', data?.length);
+    return data;
+  }
+
+  /**
+   * Get status of a specific order by OID or CLOID
+   */
+  async getOrderStatus(oid: number | string, user?: string): Promise<{
+    status: string;
+    order?: {
+      order: {
+        coin: string;
+        side: string;
+        limitPx: string;
+        sz: string;
+        origSz: string;
+        oid: number;
+        timestamp: number;
+        orderType: string;
+        tif: string | null;
+        cloid: string | null;
+        triggerCondition: string;
+        triggerPx: string;
+        isTrigger: boolean;
+        isPositionTpsl: boolean;
+        reduceOnly: boolean;
+      };
+      status: string;
+      statusTimestamp: number;
+    };
+  }> {
+    this.log('Fetching orderStatus for oid:', oid);
+    const baseUrl = isMainnet()
+      ? 'https://api.hyperliquid.xyz'
+      : 'https://api.hyperliquid-testnet.xyz';
+
+    const response = await fetch(baseUrl + '/info', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        type: 'orderStatus',
+        user: user ?? this.address,
+        oid: typeof oid === 'string' ? oid : oid,
+      }),
+    });
+    const data = await response.json();
+    this.log('orderStatus response:', JSON.stringify(data).slice(0, 500));
+    return data;
+  }
+
+  /**
+   * Get user fee schedule and volume info
+   */
+  async getUserFees(user?: string): Promise<{
+    dailyUserVlm: Array<{ date: string; exchange: string; userCross: string; userAdd: string }>;
+    feeSchedule: Record<string, unknown>;
+    userCrossRate: string;
+    userAddRate: string;
+    userSpotCrossRate: string;
+    userSpotAddRate: string;
+    activeReferralDiscount: string;
+    trial: unknown;
+    feeTrialEscrow: string;
+    nextTrialAvailableTimestamp: unknown;
+    stakingLink: { stakingUser: string; status: string } | null;
+    activeStakingDiscount: { basisPoints: number; discountRate: string } | null;
+  }> {
+    this.log('Fetching userFees for:', user ?? this.address);
+    const baseUrl = isMainnet()
+      ? 'https://api.hyperliquid.xyz'
+      : 'https://api.hyperliquid-testnet.xyz';
+
+    const response = await fetch(baseUrl + '/info', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        type: 'userFees',
+        user: user ?? this.address,
+      }),
+    });
+    const data = await response.json();
+    this.log('userFees response:', JSON.stringify(data).slice(0, 500));
+    return data;
+  }
+
+  /**
+   * Get OHLCV candle data for an asset
+   */
+  async getCandleSnapshot(
+    coin: string,
+    interval: string,
+    startTime: number,
+    endTime?: number
+  ): Promise<Array<{
+    t: number;
+    T: number;
+    s: string;
+    i: string;
+    o: string;
+    c: string;
+    h: string;
+    l: string;
+    v: string;
+    n: number;
+  }>> {
+    this.log('Fetching candleSnapshot for:', coin, interval);
+    const baseUrl = isMainnet()
+      ? 'https://api.hyperliquid.xyz'
+      : 'https://api.hyperliquid-testnet.xyz';
+
+    const req: Record<string, unknown> = { coin, interval, startTime };
+    if (endTime !== undefined) req.endTime = endTime;
+
+    const response = await fetch(baseUrl + '/info', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'candleSnapshot', req }),
+    });
+    const data = await response.json();
+    this.log('candleSnapshot response length:', data?.length);
+    return data;
+  }
+
+  /**
+   * Get historical funding rates for an asset
+   */
+  async getFundingHistory(
+    coin: string,
+    startTime: number,
+    endTime?: number
+  ): Promise<Array<{
+    coin: string;
+    fundingRate: string;
+    premium: string;
+    time: number;
+  }>> {
+    this.log('Fetching fundingHistory for:', coin);
+    const baseUrl = isMainnet()
+      ? 'https://api.hyperliquid.xyz'
+      : 'https://api.hyperliquid-testnet.xyz';
+
+    const body: Record<string, unknown> = { type: 'fundingHistory', coin, startTime };
+    if (endTime !== undefined) body.endTime = endTime;
+
+    const response = await fetch(baseUrl + '/info', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await response.json();
+    this.log('fundingHistory response length:', data?.length);
+    return data;
+  }
+
+  /**
+   * Get recent trades for an asset
+   */
+  async getRecentTrades(coin: string): Promise<Array<{
+    coin: string;
+    side: 'B' | 'A';
+    px: string;
+    sz: string;
+    time: number;
+    hash: string;
+    tid: number;
+  }>> {
+    this.log('Fetching recentTrades for:', coin);
+    const baseUrl = isMainnet()
+      ? 'https://api.hyperliquid.xyz'
+      : 'https://api.hyperliquid-testnet.xyz';
+
+    const response = await fetch(baseUrl + '/info', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'recentTrades', coin }),
+    });
+    const data = await response.json();
+    this.log('recentTrades response length:', data?.length);
+    return data;
+  }
+
+  /**
+   * Get user API rate limit status
+   */
+  async getUserRateLimit(user?: string): Promise<{
+    cumVlm: string;
+    nRequestsUsed: number;
+    nRequestsCap: number;
+    nRequestsSurplus: number;
+  }> {
+    this.log('Fetching userRateLimit for:', user ?? this.address);
+    const baseUrl = isMainnet()
+      ? 'https://api.hyperliquid.xyz'
+      : 'https://api.hyperliquid-testnet.xyz';
+
+    const response = await fetch(baseUrl + '/info', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        type: 'userRateLimit',
+        user: user ?? this.address,
+      }),
+    });
+    const data = await response.json();
+    this.log('userRateLimit response:', JSON.stringify(data));
+    return data;
+  }
+
   async getUserState(user?: string): Promise<ClearinghouseState> {
     this.log('Fetching clearinghouseState for:', user ?? this.address);
     const response = await this.info.clearinghouseState({ user: user ?? this.address });

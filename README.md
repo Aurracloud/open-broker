@@ -149,6 +149,111 @@ openbroker spot --top 20         # Top 20 by volume
 | `--top` | Limit to top N by volume | — |
 | `--verbose` | Show token metadata | — |
 
+#### `fills` — Trade Fill History
+
+View your trade executions with prices, fees, and realized PnL.
+
+```bash
+openbroker fills                          # Recent fills
+openbroker fills --coin ETH               # ETH fills only
+openbroker fills --coin BTC --side buy --top 50
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--coin` | Filter by coin symbol | — |
+| `--side` | Filter by side: `buy` or `sell` | — |
+| `--top` | Number of recent fills to show | `20` |
+
+#### `orders` — Order History
+
+View all historical orders including filled, canceled, and rejected.
+
+```bash
+openbroker orders                         # Recent orders
+openbroker orders --coin ETH --status filled
+openbroker orders --top 50
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--coin` | Filter by coin symbol | — |
+| `--status` | Filter by status (filled, canceled, open, triggered, etc.) | — |
+| `--top` | Number of recent orders to show | `20` |
+
+#### `order-status` — Check Order Status
+
+Look up the status of a specific order by ID.
+
+```bash
+openbroker order-status --oid 123456789   # By order ID
+openbroker order-status --oid 0x1234...   # By client order ID
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--oid` | Order ID (number) or client order ID (hex string) | **required** |
+
+#### `fees` — Fee Schedule
+
+View your fee tier, maker/taker rates, discounts, and recent daily trading volumes.
+
+```bash
+openbroker fees
+```
+
+#### `candles` — OHLCV Candle Data
+
+View candlestick chart data for an asset.
+
+```bash
+openbroker candles --coin ETH                           # 24 hourly candles
+openbroker candles --coin BTC --interval 4h --bars 48   # 48 four-hour bars
+openbroker candles --coin SOL --interval 1d --bars 30   # 30 daily bars
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--coin` | Asset symbol | **required** |
+| `--interval` | Candle interval: 1m, 3m, 5m, 15m, 30m, 1h, 2h, 4h, 8h, 12h, 1d, 3d, 1w, 1M | `1h` |
+| `--bars` | Number of bars to fetch | `24` |
+
+#### `funding-history` — Historical Funding Rates
+
+View historical funding rate data for an asset.
+
+```bash
+openbroker funding-history --coin ETH              # Last 24h
+openbroker funding-history --coin BTC --hours 168  # Last 7 days
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--coin` | Asset symbol | **required** |
+| `--hours` | Hours of history to fetch | `24` |
+
+#### `trades` — Recent Trades (Tape)
+
+View recent trades for an asset with buy/sell volume breakdown.
+
+```bash
+openbroker trades --coin ETH              # Last 30 trades
+openbroker trades --coin BTC --top 50     # Last 50 trades
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--coin` | Asset symbol | **required** |
+| `--top` | Number of recent trades | `30` |
+
+#### `rate-limit` — API Rate Limit
+
+Check your API rate limit usage and capacity.
+
+```bash
+openbroker rate-limit
+```
+
 ---
 
 ### Trading Commands
@@ -585,10 +690,18 @@ When loaded, the plugin registers these agent tools:
 |----------|------|-------------|
 | Info | `ob_account` | Account balance, equity, margin, open orders |
 | Info | `ob_positions` | Open positions with PnL, leverage, liquidation price |
+| Info | `ob_fills` | Trade fill history with fees and realized PnL |
+| Info | `ob_orders` | Order history (filled, canceled, open, etc.) |
+| Info | `ob_order_status` | Check status of a specific order by ID |
+| Info | `ob_fees` | Fee schedule, tier, maker/taker rates, volume |
 | Info | `ob_funding` | Funding rates sorted by annualized rate |
+| Info | `ob_funding_history` | Historical funding rates for an asset |
+| Info | `ob_candles` | OHLCV candle data for an asset |
+| Info | `ob_trades` | Recent trades (tape) for an asset |
 | Info | `ob_markets` | Market data (price, volume, OI) |
 | Info | `ob_search` | Search assets across perps, HIP-3, and spot |
 | Info | `ob_spot` | Spot markets and token balances |
+| Info | `ob_rate_limit` | API rate limit usage and capacity |
 | Trading | `ob_buy` | Market buy |
 | Trading | `ob_sell` | Market sell |
 | Trading | `ob_limit` | Limit order (GTC, IOC, ALO) |

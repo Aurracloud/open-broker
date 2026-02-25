@@ -23,6 +23,14 @@ const commands: Record<string, { script: string; description: string }> = {
   'all-markets': { script: 'info/all-markets.ts', description: 'View all markets (perps, HIP-3, spot)' },
   'search': { script: 'info/search-markets.ts', description: 'Search for assets across providers' },
   'spot': { script: 'info/spot.ts', description: 'View spot markets and balances' },
+  'fills': { script: 'info/fills.ts', description: 'View trade fill history' },
+  'orders': { script: 'info/orders.ts', description: 'View order history' },
+  'order-status': { script: 'info/order-status.ts', description: 'Check status of a specific order' },
+  'fees': { script: 'info/fees.ts', description: 'View fee schedule and volume' },
+  'candles': { script: 'info/candles.ts', description: 'View OHLCV candle data' },
+  'funding-history': { script: 'info/funding-history.ts', description: 'View historical funding rates' },
+  'trades': { script: 'info/trades.ts', description: 'View recent trades for an asset' },
+  'rate-limit': { script: 'info/rate-limit.ts', description: 'View API rate limit status' },
 
   // Operations
   'buy': { script: 'operations/market-order.ts', description: 'Market buy order' },
@@ -57,11 +65,19 @@ Setup:
 Info Commands:
   account              View account balance, equity, and margin
   positions            View open positions with PnL
+  fills                View trade fill history
+  orders               View order history (all statuses)
+  order-status         Check status of a specific order
+  fees                 View fee schedule, tiers, and volume
   funding              View funding rates (sorted by annualized rate)
+  funding-history      View historical funding rates for an asset
+  candles              View OHLCV candle data
+  trades               View recent trades (tape) for an asset
   markets              View market data for main perps
   all-markets          View all markets (perps, HIP-3, spot)
   search               Search for assets across all providers
   spot                 View spot markets and balances
+  rate-limit           View API rate limit status
 
 Trading Commands:
   buy                  Market buy order

@@ -4,8 +4,8 @@ description: Hyperliquid trading plugin with background position monitoring. Exe
 license: MIT
 compatibility: Requires Node.js 22+, network access to api.hyperliquid.xyz
 homepage: https://www.npmjs.com/package/openbroker
-metadata: {"author": "monemetrics", "version": "1.0.43", "openclaw": {"requires": {"bins": ["openbroker"], "env": ["HYPERLIQUID_PRIVATE_KEY"]}, "primaryEnv": "HYPERLIQUID_PRIVATE_KEY", "install": [{"id": "node", "kind": "node", "package": "openbroker", "bins": ["openbroker"], "label": "Install openbroker (npm)"}]}}
-allowed-tools: ob_account ob_positions ob_funding ob_markets ob_search ob_spot ob_buy ob_sell ob_limit ob_trigger ob_tpsl ob_cancel ob_twap ob_bracket ob_chase ob_watcher_status Bash(openbroker:*)
+metadata: {"author": "monemetrics", "version": "1.0.44", "openclaw": {"requires": {"bins": ["openbroker"], "env": ["HYPERLIQUID_PRIVATE_KEY"]}, "primaryEnv": "HYPERLIQUID_PRIVATE_KEY", "install": [{"id": "node", "kind": "node", "package": "openbroker", "bins": ["openbroker"], "label": "Install openbroker (npm)"}]}}
+allowed-tools: ob_account ob_positions ob_funding ob_markets ob_search ob_spot ob_fills ob_orders ob_order_status ob_fees ob_candles ob_funding_history ob_trades ob_rate_limit ob_buy ob_sell ob_limit ob_trigger ob_tpsl ob_cancel ob_twap ob_bracket ob_chase ob_watcher_status Bash(openbroker:*)
 ---
 
 # Open Broker - Hyperliquid Trading CLI
@@ -109,6 +109,55 @@ openbroker spot                   # Show all spot markets
 openbroker spot --coin PURR       # Show PURR market info
 openbroker spot --balances        # Show your spot balances
 openbroker spot --top 20          # Top 20 by volume
+```
+
+### Trade Fills
+```bash
+openbroker fills                          # Recent fills
+openbroker fills --coin ETH               # ETH fills only
+openbroker fills --coin BTC --side buy --top 50
+```
+
+### Order History
+```bash
+openbroker orders                         # Recent orders (all statuses)
+openbroker orders --coin ETH --status filled
+openbroker orders --top 50
+```
+
+### Order Status
+```bash
+openbroker order-status --oid 123456789   # Check specific order
+openbroker order-status --oid 0x1234...   # By client order ID
+```
+
+### Fee Schedule
+```bash
+openbroker fees                           # Fee tier, rates, and volume
+```
+
+### Candle Data (OHLCV)
+```bash
+openbroker candles --coin ETH                           # 24 hourly candles
+openbroker candles --coin BTC --interval 4h --bars 48   # 48 four-hour bars
+openbroker candles --coin SOL --interval 1d --bars 30   # 30 daily bars
+```
+
+### Funding History
+```bash
+openbroker funding-history --coin ETH              # Last 24h
+openbroker funding-history --coin BTC --hours 168  # Last 7 days
+```
+
+### Recent Trades (Tape)
+```bash
+openbroker trades --coin ETH              # Last 30 trades
+openbroker trades --coin BTC --top 50     # Last 50 trades
+```
+
+### Rate Limit
+```bash
+openbroker rate-limit                     # API usage and capacity
 ```
 
 ## Trading Commands

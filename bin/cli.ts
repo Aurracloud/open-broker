@@ -148,7 +148,7 @@ function runScript(scriptPath: string, args: string[]) {
 function main() {
   const args = process.argv.slice(2);
 
-  if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
+  if (args.length === 0 || args[0] === '--help' || args[0] === '-h' || args[0] === 'help') {
     printHelp();
     process.exit(0);
   }

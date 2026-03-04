@@ -268,11 +268,13 @@ async function main(): Promise<OnboardResult> {
   console.log('Step 1/3: Wallet Setup');
   console.log('----------------------');
   console.log('How would you like to set up your wallet?\n');
-  console.log('  1) Import existing private key (master wallet)');
-  console.log('  2) Generate a new wallet (master wallet)');
-  console.log('  3) Generate API wallet (recommended for agents)');
-  console.log('     Safer: can trade but cannot withdraw funds.');
-  console.log('     Requires browser approval from your master wallet.\n');
+  console.log('  1) Generate a fresh wallet (recommended for agents)');
+  console.log('     Creates a dedicated trading wallet. Builder fee is auto-approved.');
+  console.log('     Just fund it with USDC and start trading — no browser steps needed.');
+  console.log('');
+  console.log('  2) Import existing private key');
+  console.log('  3) Generate API wallet (restricted, requires browser approval)');
+  console.log('     Can trade but cannot withdraw. Requires master wallet approval in browser.\n');
 
   let choice = '';
   while (choice !== '1' && choice !== '2' && choice !== '3') {
@@ -292,7 +294,7 @@ async function main(): Promise<OnboardResult> {
   // Options 1 & 2: Master wallet flow
   let privateKey: `0x${string}`;
 
-  if (choice === '1') {
+  if (choice === '2') {
     // User has existing key
     const rl2 = createReadline();
     console.log('\nEnter your private key (0x... format):\n');
@@ -313,7 +315,7 @@ async function main(): Promise<OnboardResult> {
 
     console.log('\n✅ Private key accepted');
   } else {
-    // Generate new wallet
+    // Generate new wallet (option 1)
     console.log('\nGenerating new wallet...');
     privateKey = generatePrivateKey();
     console.log('✅ New wallet created');
@@ -385,7 +387,7 @@ HYPERLIQUID_NETWORK=mainnet
   console.log(`Network: Hyperliquid (Mainnet)`);
   console.log(`Config:  ${CONFIG_PATH}`);
 
-  if (choice === '2') {
+  if (choice === '1' || choice === '2') {
     console.log('\n⚠️  IMPORTANT: Save your private key!');
     console.log('-----------------------------------');
     console.log(`Private Key: ${privateKey}`);

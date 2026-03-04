@@ -31,9 +31,14 @@ openbroker setup                # One-command setup (wallet + config + builder a
 ```
 
 The setup command handles everything automatically:
-- Generates a new wallet or accepts your existing private key
+- Generates a fresh trading wallet (recommended for agents) or accepts your existing private key
 - Saves configuration to `~/.openbroker/.env` (permissions `0600`)
 - Approves the builder fee (required for trading)
+
+Setup offers three modes:
+1. **Generate fresh wallet** (recommended for agents) — cleanest option, no browser steps
+2. **Import existing key** — use a key you already have
+3. **Generate API wallet** — restricted wallet requiring browser approval from a master wallet
 
 ---
 
@@ -636,16 +641,24 @@ export HYPERLIQUID_NETWORK=mainnet       # Optional: mainnet (default) or testne
 export HYPERLIQUID_ACCOUNT_ADDRESS=0x... # Optional: for API wallets
 ```
 
-### API Wallet Setup
+### Fresh Wallet Setup (Recommended for Agents)
 
-For automated trading, use an API wallet:
+The simplest setup for agents — generates a dedicated wallet, auto-approves the builder fee, and is ready to trade after funding:
+
+```bash
+openbroker setup    # Choose option 1, fund with USDC, start trading
+```
+
+### API Wallet Setup (Alternative)
+
+For delegated trading without moving funds, use an API wallet:
 
 ```bash
 export HYPERLIQUID_PRIVATE_KEY="0x..."        # API wallet private key
 export HYPERLIQUID_ACCOUNT_ADDRESS="0x..."    # Main account address
 ```
 
-**Note:** Builder fee must be approved with the main wallet first. Sub-accounts cannot approve builder fees. After approval, you can switch to using the API wallet for trading.
+**Note:** API wallets require browser approval from the master wallet. The master wallet signs `ApproveAgent` and `ApproveBuilderFee` transactions via the approval URL provided during setup.
 
 ## Builder Fee
 

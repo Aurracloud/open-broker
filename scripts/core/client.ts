@@ -31,6 +31,10 @@ export class HyperliquidClient {
   private perpDexsCache: Array<{ name: string; fullName: string; deployer: string } | null> | null = null;
   /** Whether HIP-3 assets have been loaded into maps */
   private hip3Loaded: boolean = false;
+  /** HIP-3 assets that have had isolated margin set this session */
+  private hip3IsolatedSet: Set<string> = new Set();
+  /** Cached maxLeverage for HIP-3 assets */
+  private hip3MaxLeverageMap: Map<string, number> = new Map();
   public verbose: boolean = false;
 
   constructor(config?: OpenBrokerConfig) {
@@ -166,6 +170,7 @@ export class HyperliquidClient {
               this.assetMap.set(coinName, globalIndex);
               this.szDecimalsMap.set(coinName, asset.szDecimals);
               this.coinDexMap.set(coinName, { dexName: dex.name, dexIdx, localName });
+              if (asset.maxLeverage) this.hip3MaxLeverageMap.set(coinName, asset.maxLeverage);
             });
           }
         } catch (e) {
@@ -1074,6 +1079,38 @@ export class HyperliquidClient {
 
   // ============ Trading ============
 
+  /**
+   * HIP-3 perps require isolated margin mode. Automatically sets isolated margin
+   * with default leverage (3x) on first order for each HIP-3 asset this session.
+   */
+  private async ensureHip3Isolated(coin: string): Promise<void> {
+    if (!this.isHip3(coin)) return;
+    if (this.hip3IsolatedSet.has(coin)) return;
+
+    const dexInfo = this.coinDexMap.get(coin);
+    const maxLev = this.getHip3MaxLeverage(coin);
+    const leverage = Math.min(3, maxLev || 3);
+
+    this.log(`HIP-3 asset ${coin} (dex: ${dexInfo?.dexName}) — setting isolated margin at ${leverage}x`);
+    try {
+      await this.updateLeverage(coin, leverage, false); // false = isolated
+      this.hip3IsolatedSet.add(coin);
+    } catch (err) {
+      // Log but don't block — might already be set
+      this.log(`Failed to set isolated margin for ${coin}:`, err instanceof Error ? err.message : String(err));
+      this.hip3IsolatedSet.add(coin); // Don't retry every order
+    }
+  }
+
+  /**
+   * Get maxLeverage for a HIP-3 asset from cached metadata.
+   */
+  private getHip3MaxLeverage(coin: string): number | null {
+    // Already loaded via getMetaAndAssetCtxs → loadHip3Assets
+    // Check if we cached it during loadHip3Assets
+    return this.hip3MaxLeverageMap.get(coin) ?? null;
+  }
+
   async order(
     coin: string,
     isBuy: boolean,
@@ -1085,6 +1122,9 @@ export class HyperliquidClient {
   ): Promise<OrderResponse> {
     this.requireTrading();
     await this.getMetaAndAssetCtxs();
+
+    // HIP-3 perps require isolated margin mode
+    await this.ensureHip3Isolated(coin);
 
     const assetIndex = this.getAssetIndex(coin);
     const szDecimals = this.getSzDecimals(coin);
@@ -1203,6 +1243,9 @@ export class HyperliquidClient {
   ): Promise<OrderResponse> {
     this.requireTrading();
     await this.getMetaAndAssetCtxs();
+
+    // HIP-3 perps require isolated margin mode
+    await this.ensureHip3Isolated(coin);
 
     const assetIndex = this.getAssetIndex(coin);
     const szDecimals = this.getSzDecimals(coin);

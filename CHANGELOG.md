@@ -2,6 +2,11 @@
 
 All notable changes to Open Broker will be documented in this file.
 
+## [1.0.52] - 2026-03-09
+
+### Fixed
+- **HIP-3 Trading: Isolated Margin**: HIP-3 perps require isolated margin mode (per Hyperliquid docs), but orders were sent without setting it — causing "Insufficient margin to place order" rejections. Now automatically sets isolated margin (3x or asset max, whichever is lower) on first order for each HIP-3 asset. Affects all trading commands: `buy`, `sell`, `market`, `limit`, `trigger`, `tpsl`, `bracket`, `chase`, `twap`, `scale`.
+
 ## [1.0.51] - 2026-03-09
 
 ### Added

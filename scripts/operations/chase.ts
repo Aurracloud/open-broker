@@ -23,6 +23,7 @@ Options:
   --timeout     Max time to chase in seconds (default: 300 = 5 min)
   --interval    Update interval in ms (default: 2000)
   --max-chase   Max price to chase to in bps from start (default: 100 = 1%)
+  --leverage    Set leverage (e.g., 10 for 10x). Cross for main perps, isolated for HIP-3
   --reduce      Reduce-only order
   --dry         Dry run - show chase parameters without executing
 
@@ -54,6 +55,7 @@ async function main() {
   const timeoutSec = args.timeout ? parseInt(args.timeout as string) : 300;
   const intervalMs = args.interval ? parseInt(args.interval as string) : 2000;
   const maxChaseBps = args['max-chase'] ? parseInt(args['max-chase'] as string) : 100;
+  const leverage = args.leverage ? parseInt(args.leverage as string) : undefined;
   const reduceOnly = args.reduce as boolean;
   const dryRun = args.dry as boolean;
 
@@ -168,7 +170,7 @@ async function main() {
         // Place new order
         process.stdout.write(`[${iteration}] Mid: ${formatUsd(currentMid)} → Order: ${formatUsd(orderPrice)}... `);
 
-        const response = await client.limitOrder(coin, isBuy, size, orderPrice, 'Alo', reduceOnly);
+        const response = await client.limitOrder(coin, isBuy, size, orderPrice, 'Alo', reduceOnly, leverage);
 
         if (response.status === 'ok' && response.response && typeof response.response === 'object') {
           const status = response.response.data.statuses[0];

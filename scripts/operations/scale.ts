@@ -25,6 +25,7 @@ Options:
                   - linear: more size at better prices
                   - exponential: much more size at better prices
                   - flat: equal size at all levels
+  --leverage      Set leverage (e.g., 10 for 10x). Cross for main perps, isolated for HIP-3
   --reduce        Reduce-only orders (for scaling out of position)
   --tif           Time in force: GTC, ALO (default: GTC)
   --dry           Dry run - show order plan without executing
@@ -108,6 +109,7 @@ async function main() {
   const numLevels = parseInt(args.levels as string);
   const rangePct = parseFloat(args.range as string);
   const distribution = (args.distribution as string || 'linear') as 'linear' | 'exponential' | 'flat';
+  const leverage = args.leverage ? parseInt(args.leverage as string) : undefined;
   const reduceOnly = args.reduce as boolean;
   const tifArg = ((args.tif as string)?.toUpperCase() || 'GTC');
   const dryRun = args.dry as boolean;
@@ -208,7 +210,8 @@ async function main() {
           level.size,
           level.price,
           tif,
-          reduceOnly
+          reduceOnly,
+          leverage
         );
 
         if (response.status === 'ok' && response.response && typeof response.response === 'object') {

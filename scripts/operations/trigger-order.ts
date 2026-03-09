@@ -23,6 +23,7 @@ Options:
   --type        Order type: tp (take profit) or sl (stop loss)
   --limit       Limit price when triggered (default: trigger price for TP, with slippage for SL)
   --slippage    Slippage for SL in bps (default: 100 = 1%)
+  --leverage    Set leverage (e.g., 10 for 10x). Cross for main perps, isolated for HIP-3
   --reduce      Reduce-only order (default: true for TP/SL)
   --dry         Dry run - show order without placing
 
@@ -62,6 +63,7 @@ async function main() {
   const orderType = args.type as string;
   const limitPriceOverride = args.limit ? parseFloat(args.limit as string) : undefined;
   const slippageBps = args.slippage ? parseInt(args.slippage as string) : 100;
+  const leverage = args.leverage ? parseInt(args.leverage as string) : undefined;
   const reduceOnly = args.reduce !== 'false'; // Default true
   const dryRun = args.dry as boolean;
 
@@ -167,7 +169,8 @@ async function main() {
       triggerPrice,
       limitPrice,
       tpsl,
-      reduceOnly
+      reduceOnly,
+      leverage
     );
 
     console.log('\nResult');

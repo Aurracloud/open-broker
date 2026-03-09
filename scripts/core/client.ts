@@ -1127,18 +1127,20 @@ export class HyperliquidClient {
    * 1. Set isolated margin mode (required for HIP-3)
    * 2. Transfer USDC from main perp to the HIP-3 dex (each dex has its own balance)
    */
-  private async ensureHip3Ready(coin: string, notional: number): Promise<void> {
+  private async ensureHip3Ready(coin: string, notional: number, leverage?: number): Promise<void> {
     if (!this.isHip3(coin)) return;
 
     const dexInfo = this.coinDexMap.get(coin);
     if (!dexInfo?.dexName) return;
 
-    // Set isolated margin on first order per asset
-    if (!this.hip3IsolatedSet.has(coin)) {
-      const maxLev = this.hip3MaxLeverageMap.get(coin) ?? 10;
-      this.log(`HIP-3 asset ${coin} (dex: ${dexInfo.dexName}) — setting isolated margin at ${maxLev}x`);
+    const maxLev = this.hip3MaxLeverageMap.get(coin) ?? 10;
+    const effectiveLev = Math.min(leverage ?? maxLev, maxLev);
+
+    // Set isolated margin on first order per asset, or when leverage changes
+    if (!this.hip3IsolatedSet.has(coin) || leverage) {
+      this.log(`HIP-3 asset ${coin} (dex: ${dexInfo.dexName}) — setting isolated margin at ${effectiveLev}x`);
       try {
-        await this.updateLeverage(coin, maxLev, false); // false = isolated
+        await this.updateLeverage(coin, effectiveLev, false); // false = isolated
         this.hip3IsolatedSet.add(coin);
       } catch (err) {
         this.log(`Failed to set isolated margin for ${coin}:`, err instanceof Error ? err.message : String(err));
@@ -1147,8 +1149,7 @@ export class HyperliquidClient {
     }
 
     // Transfer USDC to the HIP-3 dex to cover margin
-    const maxLev = this.hip3MaxLeverageMap.get(coin) ?? 10;
-    const requiredMargin = notional / maxLev;
+    const requiredMargin = notional / effectiveLev;
     // Add 20% buffer for fees and slippage
     const transferAmount = Math.ceil(requiredMargin * 1.2 * 100) / 100;
 
@@ -1175,13 +1176,20 @@ export class HyperliquidClient {
     price: number,
     orderType: { limit: { tif: 'Gtc' | 'Ioc' | 'Alo' } },
     reduceOnly: boolean = false,
-    includeBuilder: boolean = true
+    includeBuilder: boolean = true,
+    leverage?: number
   ): Promise<OrderResponse> {
     this.requireTrading();
     await this.getMetaAndAssetCtxs();
 
+    // Set leverage if specified (for main perps, cross margin; for HIP-3, handled in ensureHip3Ready)
+    if (leverage && !this.isHip3(coin)) {
+      this.log(`Setting leverage for ${coin} to ${leverage}x cross`);
+      await this.updateLeverage(coin, leverage, true);
+    }
+
     // HIP-3 perps: set isolated margin + transfer USDC to dex
-    await this.ensureHip3Ready(coin, size * price);
+    await this.ensureHip3Ready(coin, size * price, leverage);
 
     const assetIndex = this.getAssetIndex(coin);
     const szDecimals = this.getSzDecimals(coin);
@@ -1230,7 +1238,8 @@ export class HyperliquidClient {
     coin: string,
     isBuy: boolean,
     size: number,
-    slippageBps?: number
+    slippageBps?: number,
+    leverage?: number
   ): Promise<OrderResponse> {
     await this.getMetaAndAssetCtxs();
 
@@ -1256,7 +1265,8 @@ export class HyperliquidClient {
       limitPrice,
       { limit: { tif: 'Ioc' } },
       false,
-      true
+      true,
+      leverage
     );
   }
 
@@ -1266,7 +1276,8 @@ export class HyperliquidClient {
     size: number,
     price: number,
     tif: 'Gtc' | 'Ioc' | 'Alo' = 'Gtc',
-    reduceOnly: boolean = false
+    reduceOnly: boolean = false,
+    leverage?: number
   ): Promise<OrderResponse> {
     return this.order(
       coin,
@@ -1275,7 +1286,8 @@ export class HyperliquidClient {
       price,
       { limit: { tif } },
       reduceOnly,
-      true
+      true,
+      leverage
     );
   }
 
@@ -1296,13 +1308,20 @@ export class HyperliquidClient {
     triggerPrice: number,
     limitPrice: number,
     tpsl: 'tp' | 'sl',
-    reduceOnly: boolean = true
+    reduceOnly: boolean = true,
+    leverage?: number
   ): Promise<OrderResponse> {
     this.requireTrading();
     await this.getMetaAndAssetCtxs();
 
+    // Set leverage if specified (for main perps)
+    if (leverage && !this.isHip3(coin)) {
+      this.log(`Setting leverage for ${coin} to ${leverage}x cross`);
+      await this.updateLeverage(coin, leverage, true);
+    }
+
     // HIP-3 perps: set isolated margin + transfer USDC to dex
-    await this.ensureHip3Ready(coin, size * limitPrice);
+    await this.ensureHip3Ready(coin, size * limitPrice, leverage);
 
     const assetIndex = this.getAssetIndex(coin);
     const szDecimals = this.getSzDecimals(coin);

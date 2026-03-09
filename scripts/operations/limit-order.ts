@@ -23,6 +23,7 @@ Options:
               GTC = Good Till Cancel (rests on book)
               IOC = Immediate Or Cancel (fills or cancels)
               ALO = Add Liquidity Only (post-only, maker only)
+  --leverage  Set leverage (e.g., 10 for 10x). Cross for main perps, isolated for HIP-3
   --reduce    Reduce-only order (default: false)
   --dry       Dry run - show order details without executing
 
@@ -42,6 +43,7 @@ async function main() {
   const size = parseFloat(args.size as string);
   const price = parseFloat(args.price as string);
   const tifArg = (args.tif as string)?.toUpperCase() || 'GTC';
+  const leverage = args.leverage ? parseInt(args.leverage as string) : undefined;
   const reduceOnly = args.reduce as boolean;
   const dryRun = args.dry as boolean;
 
@@ -107,6 +109,7 @@ async function main() {
     console.log(`Notional:       ${formatUsd(notional)}`);
     console.log(`Time in Force:  ${tif}`);
     console.log(`Reduce Only:    ${reduceOnly ? 'Yes' : 'No'}`);
+    if (leverage) console.log(`Leverage:       ${leverage}x`);
     console.log(`Builder Fee:    ${client.builderInfo.f / 10} bps`);
 
     // Warning if order would be aggressively priced
@@ -121,7 +124,7 @@ async function main() {
 
     console.log('\nSubmitting...');
 
-    const response = await client.limitOrder(coin, isBuy, size, price, tif, reduceOnly);
+    const response = await client.limitOrder(coin, isBuy, size, price, tif, reduceOnly, leverage);
 
     console.log('\nResult');
     console.log('------');

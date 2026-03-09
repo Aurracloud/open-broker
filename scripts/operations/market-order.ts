@@ -19,6 +19,7 @@ Options:
   --side      Order side: buy or sell
   --size      Order size in base asset
   --slippage  Slippage tolerance in bps (default: from config, usually 50 = 0.5%)
+  --leverage  Set leverage (e.g., 10 for 10x). Cross for main perps, isolated for HIP-3
   --reduce    Reduce-only order (default: false)
   --dry       Dry run - show order details without executing
   --verbose   Show full API request/response for debugging
@@ -44,6 +45,7 @@ async function main() {
   const side = args.side as string;
   const size = parseFloat(args.size as string);
   const slippage = args.slippage ? parseInt(args.slippage as string) : undefined;
+  const leverage = args.leverage ? parseInt(args.leverage as string) : undefined;
   const reduceOnly = args.reduce as boolean;
   const dryRun = args.dry as boolean;
 
@@ -103,6 +105,7 @@ async function main() {
     console.log(`Limit Price:  ${formatUsd(limitPrice)} (${slippageBps} bps slippage)`);
     console.log(`Notional:     ~${formatUsd(notional)}`);
     console.log(`Reduce Only:  ${reduceOnly ? 'Yes' : 'No'}`);
+    if (leverage) console.log(`Leverage:     ${leverage}x`);
     console.log(`Builder Fee:  ${client.builderInfo.f / 10} bps`);
 
     if (dryRun) {
@@ -112,7 +115,7 @@ async function main() {
 
     console.log('\nExecuting...');
 
-    const response = await client.marketOrder(coin, isBuy, size, slippage);
+    const response = await client.marketOrder(coin, isBuy, size, slippage, leverage);
 
     console.log('\nResult');
     console.log('------');

@@ -23,6 +23,7 @@ Options:
   --intervals   Number of slices (default: calculates based on duration)
   --randomize   Randomize timing by ±X percent (default: 0)
   --slippage    Slippage tolerance in bps per slice (default: 50)
+  --leverage    Set leverage (e.g., 10 for 10x). Cross for main perps, isolated for HIP-3
   --dry         Dry run - show execution plan without trading
 
 Examples:
@@ -57,6 +58,7 @@ async function main() {
   const intervals = args.intervals ? parseInt(args.intervals as string) : Math.max(6, Math.floor(duration / 300)); // default: 1 slice per 5 min
   const randomize = args.randomize ? parseInt(args.randomize as string) : 0;
   const slippage = args.slippage ? parseInt(args.slippage as string) : undefined;
+  const leverage = args.leverage ? parseInt(args.leverage as string) : undefined;
   const dryRun = args.dry as boolean;
 
   if (!coin || !side || isNaN(totalSize) || isNaN(duration)) {
@@ -146,7 +148,7 @@ async function main() {
       };
 
       try {
-        const response = await client.marketOrder(coin, isBuy, sliceSize, slippage);
+        const response = await client.marketOrder(coin, isBuy, sliceSize, slippage, leverage);
 
         if (response.status === 'ok' && response.response && typeof response.response === 'object') {
           const statuses = response.response.data.statuses;

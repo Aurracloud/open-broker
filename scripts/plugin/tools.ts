@@ -743,6 +743,7 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
           coin: { type: 'string', description: 'Asset symbol (ETH, BTC, SOL, etc.)' },
           size: { type: 'number', description: 'Order size in base asset' },
           slippage: { type: 'number', description: 'Slippage tolerance in bps (default: 50)' },
+          leverage: { type: 'number', description: 'Set leverage (e.g., 10 for 10x). Cross for main perps, isolated for HIP-3' },
           dry: { type: 'boolean', description: 'Preview without executing' },
         },
         required: ['coin', 'size'],
@@ -757,6 +758,7 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
         const coin = normalizeCoin(params.coin as string);
         const size = params.size as number;
         const slippageBps = (params.slippage as number) ?? client.builderInfo.f;
+        const leverage = params.leverage as number | undefined;
 
         const mids = await client.getAllMids();
         const midPrice = parseFloat(mids[coin]);
@@ -775,11 +777,12 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
             midPrice,
             slippagePrice,
             slippageBps,
+            leverage,
           });
         }
 
-        const result = await client.marketOrder(coin, true, parseFloat(roundedSize), slippageBps);
-        return json({ action: 'buy', coin, size: roundedSize, result });
+        const result = await client.marketOrder(coin, true, parseFloat(roundedSize), slippageBps, leverage);
+        return json({ action: 'buy', coin, size: roundedSize, leverage, result });
       },
     },
 
@@ -792,6 +795,7 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
           coin: { type: 'string', description: 'Asset symbol (ETH, BTC, SOL, etc.)' },
           size: { type: 'number', description: 'Order size in base asset' },
           slippage: { type: 'number', description: 'Slippage tolerance in bps (default: 50)' },
+          leverage: { type: 'number', description: 'Set leverage (e.g., 10 for 10x). Cross for main perps, isolated for HIP-3' },
           dry: { type: 'boolean', description: 'Preview without executing' },
         },
         required: ['coin', 'size'],
@@ -806,6 +810,7 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
         const coin = normalizeCoin(params.coin as string);
         const size = params.size as number;
         const slippageBps = (params.slippage as number) ?? client.builderInfo.f;
+        const leverage = params.leverage as number | undefined;
 
         const mids = await client.getAllMids();
         const midPrice = parseFloat(mids[coin]);
@@ -824,11 +829,12 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
             midPrice,
             slippagePrice,
             slippageBps,
+            leverage,
           });
         }
 
-        const result = await client.marketOrder(coin, false, parseFloat(roundedSize), slippageBps);
-        return json({ action: 'sell', coin, size: roundedSize, result });
+        const result = await client.marketOrder(coin, false, parseFloat(roundedSize), slippageBps, leverage);
+        return json({ action: 'sell', coin, size: roundedSize, leverage, result });
       },
     },
 
@@ -843,6 +849,7 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
           size: { type: 'number', description: 'Order size in base asset' },
           price: { type: 'number', description: 'Limit price' },
           tif: { type: 'string', enum: ['GTC', 'IOC', 'ALO'], description: 'Time in force (default: GTC)' },
+          leverage: { type: 'number', description: 'Set leverage (e.g., 10 for 10x). Cross for main perps, isolated for HIP-3' },
           reduce: { type: 'boolean', description: 'Reduce-only order' },
           dry: { type: 'boolean', description: 'Preview without executing' },
         },
@@ -860,6 +867,7 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
         const size = params.size as number;
         const price = params.price as number;
         const tif = ((params.tif as string) || 'GTC').toLowerCase();
+        const leverage = params.leverage as number | undefined;
         const reduceOnly = (params.reduce as boolean) || false;
 
         const szDecimals = await client.getSzDecimals(coin);
@@ -884,9 +892,9 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
         }
 
         const result = await client.limitOrder(
-          coin, isBuy, parseFloat(roundedSize), parseFloat(roundedPrice), sdkTif, reduceOnly,
+          coin, isBuy, parseFloat(roundedSize), parseFloat(roundedPrice), sdkTif, reduceOnly, leverage,
         );
-        return json({ action: 'limit', coin, side: params.side, size: roundedSize, price: roundedPrice, result });
+        return json({ action: 'limit', coin, side: params.side, size: roundedSize, price: roundedPrice, leverage, result });
       },
     },
 
@@ -1068,6 +1076,7 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
           duration: { type: 'number', description: 'Duration in seconds' },
           intervals: { type: 'number', description: 'Number of slices' },
           randomize: { type: 'number', description: 'Randomize timing by this % (0-50)' },
+          leverage: { type: 'number', description: 'Set leverage (e.g., 10 for 10x)' },
           dry: { type: 'boolean', description: 'Preview without executing' },
         },
         required: ['coin', 'side', 'size', 'duration'],
@@ -1102,6 +1111,7 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
           sl: { type: 'number', description: 'Stop loss percentage from entry' },
           entry: { type: 'string', enum: ['market', 'limit'], description: 'Entry type (default: market)' },
           price: { type: 'number', description: 'Entry price (required if entry=limit)' },
+          leverage: { type: 'number', description: 'Set leverage (e.g., 10 for 10x)' },
           dry: { type: 'boolean', description: 'Preview without executing' },
         },
         required: ['coin', 'side', 'size', 'tp', 'sl'],
@@ -1134,6 +1144,7 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
           size: { type: 'number', description: 'Order size' },
           offset: { type: 'number', description: 'Tick offset from best price (default: 1)' },
           timeout: { type: 'number', description: 'Timeout in seconds' },
+          leverage: { type: 'number', description: 'Set leverage (e.g., 10 for 10x)' },
           dry: { type: 'boolean', description: 'Preview without executing' },
         },
         required: ['coin', 'side', 'size'],

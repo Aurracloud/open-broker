@@ -24,6 +24,7 @@ Options:
   --tp          Take profit distance in % from entry
   --sl          Stop loss distance in % from entry
   --slippage    Slippage for market entry in bps (default: 50)
+  --leverage    Set leverage (e.g., 10 for 10x). Cross for main perps, isolated for HIP-3
   --dry         Dry run - show bracket plan without executing
 
 Take Profit / Stop Loss:
@@ -66,6 +67,7 @@ async function main() {
   const tpPct = parseFloat(args.tp as string);
   const slPct = parseFloat(args.sl as string);
   const slippage = args.slippage ? parseInt(args.slippage as string) : undefined;
+  const leverage = args.leverage ? parseInt(args.leverage as string) : undefined;
   const dryRun = args.dry as boolean;
 
   if (!coin || !side || isNaN(size) || isNaN(tpPct) || isNaN(slPct)) {
@@ -171,7 +173,7 @@ async function main() {
     let actualEntry = entry;
 
     if (entryType === 'market') {
-      const entryResponse = await client.marketOrder(coin, isLong, size, slippage);
+      const entryResponse = await client.marketOrder(coin, isLong, size, slippage, leverage);
 
       if (entryResponse.status === 'ok' && entryResponse.response && typeof entryResponse.response === 'object') {
         const status = entryResponse.response.data.statuses[0];
@@ -189,7 +191,7 @@ async function main() {
         process.exit(1);
       }
     } else {
-      const entryResponse = await client.limitOrder(coin, isLong, size, entry, 'Gtc', false);
+      const entryResponse = await client.limitOrder(coin, isLong, size, entry, 'Gtc', false, leverage);
 
       if (entryResponse.status === 'ok' && entryResponse.response && typeof entryResponse.response === 'object') {
         const status = entryResponse.response.data.statuses[0];

@@ -2,6 +2,15 @@
 
 All notable changes to Open Broker will be documented in this file.
 
+## [1.0.55] - 2026-03-09
+
+### Added
+- **Leverage Control**: All trading commands now support `--leverage` flag to set leverage when opening positions
+  - Main perps: sets cross margin leverage before ordering
+  - HIP-3 perps: sets isolated margin at specified leverage (capped at asset's max)
+  - CLI: `--leverage 10` on `market`, `limit`, `trigger`, `bracket`, `chase`, `twap`, `scale`
+  - Plugin: `leverage` parameter on `ob_buy`, `ob_sell`, `ob_limit`, `ob_twap`, `ob_bracket`, `ob_chase`
+
 ## [1.0.54] - 2026-03-09
 
 ### Fixed

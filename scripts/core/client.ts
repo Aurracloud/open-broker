@@ -1075,7 +1075,7 @@ export class HyperliquidClient {
 
   /**
    * Get user state across all dexes (main + HIP-3).
-   * Returns the main state with HIP-3 positions merged into assetPositions.
+   * Merges HIP-3 positions into assetPositions and aggregates margin summaries.
    */
   async getUserStateAll(user?: string): Promise<ClearinghouseState> {
     await this.getMetaAndAssetCtxs(); // Ensure HIP-3 dex list is loaded
@@ -1091,6 +1091,20 @@ export class HyperliquidClient {
         const dexState = await this.getUserState(user, dex.name);
         if (dexState.assetPositions?.length > 0) {
           mainState.assetPositions.push(...dexState.assetPositions);
+        }
+
+        // Aggregate margin summaries from HIP-3 dexes
+        const dexMargin = dexState.marginSummary;
+        if (dexMargin) {
+          const addToSummary = (summary: { accountValue: string; totalNtlPos: string; totalRawUsd: string; totalMarginUsed: string; withdrawable: string }) => {
+            summary.accountValue = String(parseFloat(summary.accountValue) + parseFloat(dexMargin.accountValue));
+            summary.totalNtlPos = String(parseFloat(summary.totalNtlPos) + parseFloat(dexMargin.totalNtlPos));
+            summary.totalRawUsd = String(parseFloat(summary.totalRawUsd) + parseFloat(dexMargin.totalRawUsd));
+            summary.totalMarginUsed = String(parseFloat(summary.totalMarginUsed) + parseFloat(dexMargin.totalMarginUsed));
+            summary.withdrawable = String(parseFloat(summary.withdrawable) + parseFloat(dexMargin.withdrawable));
+          };
+          addToSummary(mainState.marginSummary);
+          addToSummary(mainState.crossMarginSummary);
         }
       } catch (err) {
         this.log(`Failed to fetch state for dex ${dex.name}:`, err instanceof Error ? err.message : String(err));

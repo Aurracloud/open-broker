@@ -2,6 +2,13 @@
 
 All notable changes to Open Broker will be documented in this file.
 
+## [1.0.54] - 2026-03-09
+
+### Fixed
+- **HIP-3 Aggregate Margin**: `getUserStateAll()` now sums equity, margin used, notional, and withdrawable across all HIP-3 dexes. Previously only reported main dex margin — causing watcher, account, and positions to show ~$5 equity and miss HIP-3 isolated positions.
+- **Builder Fee Re-enabled for HIP-3**: Builder fee is now included on HIP-3 orders (was incorrectly skipped).
+- **Plugin Tools HIP-3 Positions**: `ob_account`, `ob_positions`, and `ob_tpsl` plugin tools now use `getUserStateAll()` to include HIP-3 positions.
+
 ## [1.0.53] - 2026-03-09
 
 ### Fixed

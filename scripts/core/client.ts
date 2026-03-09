@@ -1192,13 +1192,10 @@ export class HyperliquidClient {
       grouping: 'na',
     };
 
-    // Add builder fee if configured (skip for HIP-3 — builder fees may not be supported on builder-deployed perps)
-    const isHip3Asset = this.isHip3(coin);
-    if (includeBuilder && !isHip3Asset && this.config.builderAddress !== '0x0000000000000000000000000000000000000000') {
+    // Add builder fee if configured
+    if (includeBuilder && this.config.builderAddress !== '0x0000000000000000000000000000000000000000') {
       orderRequest.builder = this.builderInfo;
       this.log('Including builder fee:', this.builderInfo);
-    } else if (isHip3Asset) {
-      this.log('Skipping builder fee for HIP-3 asset:', coin);
     }
 
     try {
@@ -1325,9 +1322,8 @@ export class HyperliquidClient {
       grouping: 'na',
     };
 
-    // Add builder fee if configured (skip for HIP-3)
-    const isHip3Trigger = this.isHip3(coin);
-    if (!isHip3Trigger && this.config.builderAddress !== '0x0000000000000000000000000000000000000000') {
+    // Add builder fee if configured
+    if (this.config.builderAddress !== '0x0000000000000000000000000000000000000000') {
       orderRequest.builder = this.builderInfo;
       this.log('Including builder fee:', this.builderInfo);
     }

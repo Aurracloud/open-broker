@@ -200,7 +200,7 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
         type: 'object',
         properties: {
           query: { type: 'string', description: 'Search query (e.g. GOLD, BTC, ETH)' },
-          type: { type: 'string', description: 'Filter by market type: perp, hip3, spot' },
+          type: { type: 'string', enum: ['perp', 'hip3', 'spot', 'all'], description: 'Filter by market type: perp, hip3, spot, or all (default: all)' },
         },
         required: ['query'],
       },
@@ -208,35 +208,42 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
         const { getClient } = await import('../core/client.js');
         const client = getClient();
         const query = (params.query as string).toUpperCase();
-        const typeFilter = params.type as string | undefined;
+        // Normalize type filter: lowercase, strip hyphens, treat "all" as no filter
+        const rawType = params.type ? String(params.type).toLowerCase().replace(/-/g, '') : undefined;
+        const typeFilter = rawType === 'all' ? undefined : rawType;
 
         const results: Array<Record<string, unknown>> = [];
+        const errors: string[] = [];
 
         // Search main perps
         if (!typeFilter || typeFilter === 'perp') {
-          const { meta, assetCtxs } = await client.getMetaAndAssetCtxs();
-          for (let i = 0; i < meta.universe.length; i++) {
-            const asset = meta.universe[i];
-            if (asset.name.toUpperCase().includes(query)) {
-              results.push({
-                coin: asset.name,
-                type: 'perp',
-                markPx: assetCtxs[i]?.markPx,
-                dayVolume: assetCtxs[i]?.dayNtlVlm,
-                maxLeverage: asset.maxLeverage,
-              });
+          try {
+            const { meta, assetCtxs } = await client.getMetaAndAssetCtxs();
+            for (let i = 0; i < meta.universe.length; i++) {
+              const asset = meta.universe[i];
+              if (asset.name.toUpperCase().includes(query)) {
+                results.push({
+                  coin: asset.name,
+                  type: 'perp',
+                  markPx: assetCtxs[i]?.markPx,
+                  dayVolume: assetCtxs[i]?.dayNtlVlm,
+                  maxLeverage: asset.maxLeverage,
+                });
+              }
             }
-          }
+          } catch (e) { errors.push(`perp: ${e instanceof Error ? e.message : String(e)}`); }
         }
 
         // Search HIP-3 perps
         if (!typeFilter || typeFilter === 'hip3' || typeFilter === 'perp') {
           try {
             const allPerps = await client.getAllPerpMetas();
-            for (const dexData of allPerps) {
-              if (!dexData.dexName) continue; // Skip main dex (already searched)
+            for (let dexIdx = 1; dexIdx < allPerps.length; dexIdx++) {
+              const dexData = allPerps[dexIdx];
+              if (!dexData || !dexData.meta?.universe) continue;
               for (let i = 0; i < dexData.meta.universe.length; i++) {
                 const asset = dexData.meta.universe[i];
+                if (!asset) continue;
                 if (asset.name.toUpperCase().includes(query)) {
                   results.push({
                     // API returns names already prefixed (e.g., "xyz:CL")
@@ -250,7 +257,7 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
                 }
               }
             }
-          } catch { /* HIP-3 may not be available */ }
+          } catch (e) { errors.push(`hip3: ${e instanceof Error ? e.message : String(e)}`); }
         }
 
         // Search spot
@@ -268,10 +275,12 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
                 });
               }
             }
-          } catch { /* spot may not be available */ }
+          } catch (e) { errors.push(`spot: ${e instanceof Error ? e.message : String(e)}`); }
         }
 
-        return json({ query, results });
+        const response: Record<string, unknown> = { query, results };
+        if (errors.length > 0) response.errors = errors;
+        return json(response);
       },
     },
 

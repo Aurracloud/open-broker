@@ -2,6 +2,12 @@
 
 All notable changes to Open Broker will be documented in this file.
 
+## [1.0.50] - 2026-03-09
+
+### Fixed
+- **Plugin `ob_search` HIP-3 Results**: Fixed empty results for HIP-3 assets when using the `ob_search` plugin tool. Added type filter normalization (handles `HIP3`, `HIP-3`, `hip3`, `all`), added `enum` constraint to type parameter schema, surfaced errors instead of silently swallowing them, and aligned HIP-3 iteration with CLI search (index-based with null guards).
+- **SKILL.md**: Added "Finding Assets Before Trading" section instructing agents to always search for unfamiliar assets before trading, with examples of `ob_search` and `openbroker search`.
+
 ## [1.0.49] - 2026-03-09
 
 ### Fixed

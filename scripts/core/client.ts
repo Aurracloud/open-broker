@@ -130,7 +130,7 @@ export class HyperliquidClient {
 
   /**
    * Load HIP-3 perp dex assets into the asset/szDecimals maps.
-   * Asset index formula: 10000 * dexIdx + assetIdx
+   * Asset index formula: 100000 + dexIdx * 10000 + assetIdx
    * Coins are keyed as "dexName:COIN" (e.g., "xyz:CL")
    */
   private async loadHip3Assets(): Promise<void> {
@@ -161,7 +161,7 @@ export class HyperliquidClient {
               const coinName = asset.name;
               // Extract local name by stripping dex prefix if present
               const localName = coinName.startsWith(dex.name + ':') ? coinName.slice(dex.name.length + 1) : coinName;
-              const globalIndex = 10000 * dexIdx + assetIdx;
+              const globalIndex = 100000 + dexIdx * 10000 + assetIdx;
 
               this.assetMap.set(coinName, globalIndex);
               this.szDecimalsMap.set(coinName, asset.szDecimals);

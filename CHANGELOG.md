@@ -2,11 +2,16 @@
 
 All notable changes to Open Broker will be documented in this file.
 
+## [1.0.49] - 2026-03-09
+
+### Fixed
+- **HIP-3 Asset ID Offset**: Fixed asset ID formula from `dexIdx * 10000 + assetIdx` to `100000 + dexIdx * 10000 + assetIdx`. Orders were routing to spot asset IDs instead of HIP-3 perps, causing "Order price cannot be more than 95% away from the reference price" errors.
+
 ## [1.0.48] - 2026-03-09
 
 ### Fixed
 - **HIP-3 Perp Trading**: All trading commands now work with HIP-3 assets using `dex:COIN` syntax (e.g., `--coin xyz:CL`)
-  - `getMetaAndAssetCtxs()` loads HIP-3 dex assets into asset/szDecimals maps (asset index = `10000 * dexIdx + assetIdx`)
+  - `getMetaAndAssetCtxs()` loads HIP-3 dex assets into asset/szDecimals maps (asset index = `100000 + dexIdx * 10000 + assetIdx`)
   - `getAllMids()` fetches and merges mid prices from all HIP-3 dexes
   - Market, limit, trigger, bracket, TWAP, scale, chase orders all work with HIP-3 assets
 - **HIP-3 Info Commands**: `funding`, `funding-history`, `candles`, `trades` now return data for HIP-3 assets (previously returned "No data" / null)

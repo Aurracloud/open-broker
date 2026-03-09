@@ -14,7 +14,7 @@ async function main() {
 
   try {
     const [state, mids, fundingHistory] = await Promise.all([
-      client.getUserState(),
+      client.getUserStateAll(),
       client.getAllMids(),
       client.getUserFunding(),
     ]);

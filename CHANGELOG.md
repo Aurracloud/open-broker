@@ -2,10 +2,15 @@
 
 All notable changes to Open Broker will be documented in this file.
 
+## [1.0.53] - 2026-03-09
+
+### Fixed
+- **HIP-3 Isolated Margin: Use Max Leverage**: The 3x leverage cap was too conservative for isolated margin — at 3x a $83 CL position needs $28 margin, which gets rejected even on funded accounts. Now uses the asset's `maxLeverage` (e.g., 20x for CL, 25x for GOLD) to minimize margin requirement. At 20x isolated, the same position only needs ~$4 margin.
+
 ## [1.0.52] - 2026-03-09
 
 ### Fixed
-- **HIP-3 Trading: Isolated Margin**: HIP-3 perps require isolated margin mode (per Hyperliquid docs), but orders were sent without setting it — causing "Insufficient margin to place order" rejections. Now automatically sets isolated margin (3x or asset max, whichever is lower) on first order for each HIP-3 asset. Affects all trading commands: `buy`, `sell`, `market`, `limit`, `trigger`, `tpsl`, `bracket`, `chase`, `twap`, `scale`.
+- **HIP-3 Trading: Isolated Margin**: HIP-3 perps require isolated margin mode (per Hyperliquid docs), but orders were sent without setting it — causing "Insufficient margin to place order" rejections. Now automatically sets isolated margin on first order for each HIP-3 asset. Affects all trading commands: `buy`, `sell`, `market`, `limit`, `trigger`, `tpsl`, `bracket`, `chase`, `twap`, `scale`.
 
 ## [1.0.51] - 2026-03-09
 

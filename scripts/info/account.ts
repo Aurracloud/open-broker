@@ -30,7 +30,7 @@ async function main() {
   console.log('');
 
   try {
-    const state = await client.getUserState();
+    const state = await client.getUserStateAll();
 
     const margin = state.crossMarginSummary;
     const accountValue = parseFloat(margin.accountValue);

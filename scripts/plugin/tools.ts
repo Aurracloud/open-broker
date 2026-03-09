@@ -34,7 +34,7 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
       async execute(_id, params) {
         const { getClient } = await import('../core/client.js');
         const client = getClient();
-        const state = await client.getUserState();
+        const state = await client.getUserStateAll();
 
         const result: Record<string, unknown> = {
           address: client.address,
@@ -85,7 +85,7 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
       async execute(_id, params) {
         const { getClient } = await import('../core/client.js');
         const client = getClient();
-        const state = await client.getUserState();
+        const state = await client.getUserStateAll();
 
         let positions = state.assetPositions
           .filter(ap => parseFloat(ap.position.szi) !== 0)
@@ -969,7 +969,7 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
         const coin = normalizeCoin(params.coin as string);
 
         // Get current position
-        const state = await client.getUserState();
+        const state = await client.getUserStateAll();
         const position = state.assetPositions.find(
           ap => ap.position.coin === coin && parseFloat(ap.position.szi) !== 0,
         );

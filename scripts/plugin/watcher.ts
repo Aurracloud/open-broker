@@ -117,7 +117,7 @@ export class PositionWatcher implements PluginService {
     try {
       const { getClient } = await import('../core/client.js');
       const client = getClient();
-      const state = await client.getUserState(this.accountAddress);
+      const state = await client.getUserStateAll(this.accountAddress);
 
       const snapshot = this.buildSnapshot(state);
 

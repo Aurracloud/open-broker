@@ -1065,10 +1065,39 @@ export class HyperliquidClient {
     return data;
   }
 
-  async getUserState(user?: string): Promise<ClearinghouseState> {
-    this.log('Fetching clearinghouseState for:', user ?? this.address);
-    const response = await this.info.clearinghouseState({ user: user ?? this.address });
+  async getUserState(user?: string, dex?: string): Promise<ClearinghouseState> {
+    this.log('Fetching clearinghouseState for:', user ?? this.address, dex ? `dex: ${dex}` : '');
+    const params: { user: string; dex?: string } = { user: user ?? this.address };
+    if (dex !== undefined) params.dex = dex;
+    const response = await this.info.clearinghouseState(params as any);
     return response as ClearinghouseState;
+  }
+
+  /**
+   * Get user state across all dexes (main + HIP-3).
+   * Returns the main state with HIP-3 positions merged into assetPositions.
+   */
+  async getUserStateAll(user?: string): Promise<ClearinghouseState> {
+    await this.getMetaAndAssetCtxs(); // Ensure HIP-3 dex list is loaded
+
+    const mainState = await this.getUserState(user);
+    const dexs = await this.getPerpDexs();
+
+    for (let i = 1; i < dexs.length; i++) {
+      const dex = dexs[i];
+      if (!dex) continue;
+
+      try {
+        const dexState = await this.getUserState(user, dex.name);
+        if (dexState.assetPositions?.length > 0) {
+          mainState.assetPositions.push(...dexState.assetPositions);
+        }
+      } catch (err) {
+        this.log(`Failed to fetch state for dex ${dex.name}:`, err instanceof Error ? err.message : String(err));
+      }
+    }
+
+    return mainState;
   }
 
   async getOpenOrders(user?: string): Promise<OpenOrder[]> {
@@ -1080,35 +1109,49 @@ export class HyperliquidClient {
   // ============ Trading ============
 
   /**
-   * HIP-3 perps require isolated margin mode. Automatically sets isolated margin
-   * with default leverage (3x) on first order for each HIP-3 asset this session.
+   * HIP-3 perps have independent margin per dex. Before ordering:
+   * 1. Set isolated margin mode (required for HIP-3)
+   * 2. Transfer USDC from main perp to the HIP-3 dex (each dex has its own balance)
    */
-  private async ensureHip3Isolated(coin: string): Promise<void> {
+  private async ensureHip3Ready(coin: string, notional: number): Promise<void> {
     if (!this.isHip3(coin)) return;
-    if (this.hip3IsolatedSet.has(coin)) return;
 
     const dexInfo = this.coinDexMap.get(coin);
-    const maxLev = this.getHip3MaxLeverage(coin);
-    const leverage = Math.min(3, maxLev || 3);
+    if (!dexInfo?.dexName) return;
 
-    this.log(`HIP-3 asset ${coin} (dex: ${dexInfo?.dexName}) — setting isolated margin at ${leverage}x`);
-    try {
-      await this.updateLeverage(coin, leverage, false); // false = isolated
-      this.hip3IsolatedSet.add(coin);
-    } catch (err) {
-      // Log but don't block — might already be set
-      this.log(`Failed to set isolated margin for ${coin}:`, err instanceof Error ? err.message : String(err));
-      this.hip3IsolatedSet.add(coin); // Don't retry every order
+    // Set isolated margin on first order per asset
+    if (!this.hip3IsolatedSet.has(coin)) {
+      const maxLev = this.hip3MaxLeverageMap.get(coin) ?? 10;
+      this.log(`HIP-3 asset ${coin} (dex: ${dexInfo.dexName}) — setting isolated margin at ${maxLev}x`);
+      try {
+        await this.updateLeverage(coin, maxLev, false); // false = isolated
+        this.hip3IsolatedSet.add(coin);
+      } catch (err) {
+        this.log(`Failed to set isolated margin for ${coin}:`, err instanceof Error ? err.message : String(err));
+        this.hip3IsolatedSet.add(coin);
+      }
     }
-  }
 
-  /**
-   * Get maxLeverage for a HIP-3 asset from cached metadata.
-   */
-  private getHip3MaxLeverage(coin: string): number | null {
-    // Already loaded via getMetaAndAssetCtxs → loadHip3Assets
-    // Check if we cached it during loadHip3Assets
-    return this.hip3MaxLeverageMap.get(coin) ?? null;
+    // Transfer USDC to the HIP-3 dex to cover margin
+    const maxLev = this.hip3MaxLeverageMap.get(coin) ?? 10;
+    const requiredMargin = notional / maxLev;
+    // Add 20% buffer for fees and slippage
+    const transferAmount = Math.ceil(requiredMargin * 1.2 * 100) / 100;
+
+    this.log(`HIP-3 margin transfer: ${transferAmount} USDC from main → ${dexInfo.dexName} (notional: ${notional}, leverage: ${maxLev}x)`);
+    try {
+      await this.exchange.sendAsset({
+        destination: this.address as `0x${string}`,
+        sourceDex: '',            // main perp dex
+        destinationDex: dexInfo.dexName,
+        token: 'USDC:0x6d1e7cde53ba9467b783cb7c530ce054',
+        amount: String(transferAmount),
+      });
+      this.log(`Transferred ${transferAmount} USDC to ${dexInfo.dexName} dex`);
+    } catch (err) {
+      // Log but don't block — dex may already have sufficient balance
+      this.log(`Margin transfer to ${dexInfo.dexName} failed:`, err instanceof Error ? err.message : String(err));
+    }
   }
 
   async order(
@@ -1123,8 +1166,8 @@ export class HyperliquidClient {
     this.requireTrading();
     await this.getMetaAndAssetCtxs();
 
-    // HIP-3 perps require isolated margin mode
-    await this.ensureHip3Isolated(coin);
+    // HIP-3 perps: set isolated margin + transfer USDC to dex
+    await this.ensureHip3Ready(coin, size * price);
 
     const assetIndex = this.getAssetIndex(coin);
     const szDecimals = this.getSzDecimals(coin);
@@ -1149,10 +1192,13 @@ export class HyperliquidClient {
       grouping: 'na',
     };
 
-    // Add builder fee if configured
-    if (includeBuilder && this.config.builderAddress !== '0x0000000000000000000000000000000000000000') {
+    // Add builder fee if configured (skip for HIP-3 — builder fees may not be supported on builder-deployed perps)
+    const isHip3Asset = this.isHip3(coin);
+    if (includeBuilder && !isHip3Asset && this.config.builderAddress !== '0x0000000000000000000000000000000000000000') {
       orderRequest.builder = this.builderInfo;
       this.log('Including builder fee:', this.builderInfo);
+    } else if (isHip3Asset) {
+      this.log('Skipping builder fee for HIP-3 asset:', coin);
     }
 
     try {
@@ -1244,8 +1290,8 @@ export class HyperliquidClient {
     this.requireTrading();
     await this.getMetaAndAssetCtxs();
 
-    // HIP-3 perps require isolated margin mode
-    await this.ensureHip3Isolated(coin);
+    // HIP-3 perps: set isolated margin + transfer USDC to dex
+    await this.ensureHip3Ready(coin, size * limitPrice);
 
     const assetIndex = this.getAssetIndex(coin);
     const szDecimals = this.getSzDecimals(coin);
@@ -1279,8 +1325,9 @@ export class HyperliquidClient {
       grouping: 'na',
     };
 
-    // Add builder fee if configured
-    if (this.config.builderAddress !== '0x0000000000000000000000000000000000000000') {
+    // Add builder fee if configured (skip for HIP-3)
+    const isHip3Trigger = this.isHip3(coin);
+    if (!isHip3Trigger && this.config.builderAddress !== '0x0000000000000000000000000000000000000000') {
       orderRequest.builder = this.builderInfo;
       this.log('Including builder fee:', this.builderInfo);
     }

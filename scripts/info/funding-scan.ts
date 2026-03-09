@@ -67,7 +67,8 @@ async function scanFunding(client: ReturnType<typeof getClient>, options: {
       if (Math.abs(annualizedPct) < options.threshold) continue;
       if (openInterest < 100) continue;
 
-      const coin = dexData.dexName ? `${dexData.dexName}:${asset.name}` : asset.name;
+      // API returns HIP-3 names already prefixed (e.g., "xyz:CL")
+      const coin = asset.name;
 
       results.push({
         coin,

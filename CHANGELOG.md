@@ -2,6 +2,32 @@
 
 All notable changes to Open Broker will be documented in this file.
 
+## [1.0.48] - 2026-03-09
+
+### Fixed
+- **HIP-3 Perp Trading**: All trading commands now work with HIP-3 assets using `dex:COIN` syntax (e.g., `--coin xyz:CL`)
+  - `getMetaAndAssetCtxs()` loads HIP-3 dex assets into asset/szDecimals maps (asset index = `10000 * dexIdx + assetIdx`)
+  - `getAllMids()` fetches and merges mid prices from all HIP-3 dexes
+  - Market, limit, trigger, bracket, TWAP, scale, chase orders all work with HIP-3 assets
+- **HIP-3 Info Commands**: `funding`, `funding-history`, `candles`, `trades` now return data for HIP-3 assets (previously returned "No data" / null)
+- **API Name Format**: Hyperliquid API returns HIP-3 names already prefixed (e.g., `xyz:CL`); fixed double-prefixing bug that caused all HIP-3 lookups to fail
+- **Case Normalization**: Added `normalizeCoin()` helper — keeps dex prefix lowercase, uppercases asset (`xyz:cl` → `xyz:CL`). Fixes `toUpperCase()` mangling HIP-3 tickers to `XYZ:CL`
+- **Better Error Messages**: When a bare coin name (e.g., `CL`) matches HIP-3 assets, the error now suggests the prefixed ticker (e.g., `xyz:CL`)
+
+### Added
+- **Funding Rate Scanner**: New `funding-scan` command for cross-dex funding rate scanning
+  - Scans all dexes (main + HIP-3) for high funding opportunities
+  - `--pairs` flag identifies opposing funding pairs for delta-neutral strategies
+  - `--watch --interval N` for periodic re-scanning
+  - `--json` output for piping to alerting systems
+  - `--main-only` / `--hip3-only` scope filters
+- **HIP-3 Funding Rates**: `funding` and `markets` commands now support `--include-hip3` flag
+- **HIP-3 Funding Arb**: `funding-arb` strategy now works with HIP-3 assets (monitoring loop correctly resolves HIP-3 funding data)
+- **Plugin**: New `ob_funding_scan` agent tool for cross-dex funding scanning with pairs support
+- **Plugin**: `ob_search` now searches HIP-3 perps in addition to main perps and spot
+- **Client**: Added `getCoinDex()`, `getCoinLocalName()`, `isHip3()`, `getAllAssetNames()`, `getHip3AssetNames()`, `invalidateMetaCache()` methods
+- **Client**: `getPerpDexs()` results are now cached to reduce redundant API calls
+
 ## [1.0.44] - 2026-02-25
 
 ### Added

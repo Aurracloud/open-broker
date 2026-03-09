@@ -105,13 +105,13 @@ async function main() {
     if (client.isHip3(coin)) {
       const allPerps = await client.getAllPerpMetas();
       const dexName = client.getCoinDex(coin);
-      const localName = client.getCoinLocalName(coin);
       const dexData = allPerps.find(d => d.dexName === dexName);
       if (!dexData) {
         console.error(`Error: No market data for HIP-3 dex ${dexName}`);
         process.exit(1);
       }
-      const assetIdx = dexData.meta.universe.findIndex(a => a.name === localName);
+      // API returns universe names already prefixed (e.g., "xyz:CL")
+      const assetIdx = dexData.meta.universe.findIndex(a => a.name === coin);
       if (assetIdx === -1 || !dexData.assetCtxs[assetIdx]) {
         console.error(`Error: No market data for ${coin}`);
         process.exit(1);
@@ -245,9 +245,9 @@ async function main() {
         if (client.isHip3(coin)) {
           const freshPerps = await client.getAllPerpMetas();
           const dexName = client.getCoinDex(coin);
-          const localName = client.getCoinLocalName(coin);
           const dexData = freshPerps.find(d => d.dexName === dexName);
-          const idx = dexData?.meta.universe.findIndex(a => a.name === localName) ?? -1;
+          // API returns universe names already prefixed (e.g., "xyz:CL")
+          const idx = dexData?.meta.universe.findIndex(a => a.name === coin) ?? -1;
           newHourlyFunding = idx >= 0 && dexData?.assetCtxs[idx] ? parseFloat(dexData.assetCtxs[idx].funding) : 0;
         } else {
           const newMeta = await client.getMetaAndAssetCtxs();

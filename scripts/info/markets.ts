@@ -71,8 +71,9 @@ async function main() {
           const ctx = dexData.assetCtxs[i];
           if (!ctx) continue;
 
-          const prefixedName = `${dexData.dexName}:${asset.name}`;
-          if (filterCoin && prefixedName !== filterCoin) continue;
+          // API returns names already prefixed (e.g., "xyz:CL")
+          const coinName = asset.name;
+          if (filterCoin && coinName !== filterCoin) continue;
 
           const markPx = parseFloat(ctx.markPx);
           const oraclePx = parseFloat(ctx.oraclePx);
@@ -82,7 +83,7 @@ async function main() {
           const change24h = prevDayPx > 0 ? (markPx - prevDayPx) / prevDayPx : 0;
 
           markets.push({
-            coin: prefixedName,
+            coin: coinName,
             markPx,
             oraclePx,
             prevDayPx,

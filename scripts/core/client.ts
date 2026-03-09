@@ -157,12 +157,15 @@ export class HyperliquidClient {
             this.log(`Loading HIP-3 dex: ${dex.name} with ${universe.length} markets`);
 
             universe.forEach((asset, assetIdx) => {
-              const prefixedName = `${dex.name}:${asset.name}`;
+              // API returns names already prefixed (e.g., "xyz:CL"), use as-is
+              const coinName = asset.name;
+              // Extract local name by stripping dex prefix if present
+              const localName = coinName.startsWith(dex.name + ':') ? coinName.slice(dex.name.length + 1) : coinName;
               const globalIndex = 10000 * dexIdx + assetIdx;
 
-              this.assetMap.set(prefixedName, globalIndex);
-              this.szDecimalsMap.set(prefixedName, asset.szDecimals);
-              this.coinDexMap.set(prefixedName, { dexName: dex.name, dexIdx, localName: asset.name });
+              this.assetMap.set(coinName, globalIndex);
+              this.szDecimalsMap.set(coinName, asset.szDecimals);
+              this.coinDexMap.set(coinName, { dexName: dex.name, dexIdx, localName });
             });
           }
         } catch (e) {
@@ -197,9 +200,9 @@ export class HyperliquidClient {
           });
           const dexMids = await dexResponse.json() as Record<string, string>;
 
-          // Merge with prefixed keys
+          // Merge directly — API already returns prefixed keys (e.g., "xyz:CL")
           for (const [coin, mid] of Object.entries(dexMids)) {
-            response[`${dex.name}:${coin}`] = mid;
+            response[coin] = mid;
           }
         } catch (e) {
           this.log(`Failed to fetch mids for HIP-3 dex ${dex.name}:`, e);
@@ -506,8 +509,8 @@ export class HyperliquidClient {
     spreadBps: number;
   }> {
     this.log('Fetching l2Book for:', coin);
-    const localName = this.getCoinLocalName(coin);
-    const response = await this.info.l2Book({ coin: localName });
+    // API accepts prefixed names directly (e.g., "xyz:CL")
+    const response = await this.info.l2Book({ coin });
 
     const bids = response.levels[0] as Array<{ px: string; sz: string; n: number }>;
     const asks = response.levels[1] as Array<{ px: string; sz: string; n: number }>;
@@ -954,12 +957,9 @@ export class HyperliquidClient {
       ? 'https://api.hyperliquid.xyz'
       : 'https://api.hyperliquid-testnet.xyz';
 
-    const localName = this.getCoinLocalName(coin);
-    const dex = this.getCoinDex(coin);
-
-    const req: Record<string, unknown> = { coin: localName, interval, startTime };
+    // API accepts prefixed names directly (e.g., "xyz:CL")
+    const req: Record<string, unknown> = { coin, interval, startTime };
     if (endTime !== undefined) req.endTime = endTime;
-    if (dex) req.dex = dex;
 
     const response = await fetch(baseUrl + '/info', {
       method: 'POST',
@@ -989,12 +989,9 @@ export class HyperliquidClient {
       ? 'https://api.hyperliquid.xyz'
       : 'https://api.hyperliquid-testnet.xyz';
 
-    const localName = this.getCoinLocalName(coin);
-    const dex = this.getCoinDex(coin);
-
-    const body: Record<string, unknown> = { type: 'fundingHistory', coin: localName, startTime };
+    // API accepts prefixed names directly (e.g., "xyz:CL")
+    const body: Record<string, unknown> = { type: 'fundingHistory', coin, startTime };
     if (endTime !== undefined) body.endTime = endTime;
-    if (dex) body.dex = dex;
 
     const response = await fetch(baseUrl + '/info', {
       method: 'POST',
@@ -1023,11 +1020,8 @@ export class HyperliquidClient {
       ? 'https://api.hyperliquid.xyz'
       : 'https://api.hyperliquid-testnet.xyz';
 
-    const localName = this.getCoinLocalName(coin);
-    const dex = this.getCoinDex(coin);
-
-    const body: Record<string, unknown> = { type: 'recentTrades', coin: localName };
-    if (dex) body.dex = dex;
+    // API accepts prefixed names directly (e.g., "xyz:CL")
+    const body: Record<string, unknown> = { type: 'recentTrades', coin };
 
     const response = await fetch(baseUrl + '/info', {
       method: 'POST',

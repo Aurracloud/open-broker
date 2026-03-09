@@ -2,7 +2,7 @@
 // View historical funding rates for an asset on Hyperliquid
 
 import { getClient } from '../core/client.js';
-import { formatPercent, annualizeFundingRate, parseArgs } from '../core/utils.js';
+import { formatPercent, annualizeFundingRate, parseArgs, normalizeCoin } from '../core/utils.js';
 
 function printUsage() {
   console.log(`
@@ -37,7 +37,7 @@ async function main() {
   const hours = parseInt(args.hours as string) || 24;
   const client = getClient();
 
-  console.log(`Open Broker - ${coin.toUpperCase()} Funding History (${hours}h)`);
+  console.log(`Open Broker - ${normalizeCoin(coin)} Funding History (${hours}h)`);
   console.log('='.repeat(40) + '\n');
 
   try {
@@ -46,7 +46,7 @@ async function main() {
 
     const now = Date.now();
     const startTime = now - (hours * 3_600_000);
-    const history = await client.getFundingHistory(coin.toUpperCase(), startTime);
+    const history = await client.getFundingHistory(normalizeCoin(coin), startTime);
 
     if (history.length === 0) {
       console.log('No funding history found');

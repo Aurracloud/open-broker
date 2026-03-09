@@ -3,6 +3,7 @@
 
 import type { PluginTool } from './types.js';
 import type { PositionWatcher } from './watcher.js';
+import { normalizeCoin } from '../core/utils.js';
 
 /** Helper to wrap a result as OpenClaw tool response */
 function json(payload: unknown) {
@@ -102,7 +103,7 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
           }));
 
         if (params.coin) {
-          const coin = (params.coin as string).toUpperCase();
+          const coin = normalizeCoin(params.coin as string);
           positions = positions.filter(p => p.coin === coin);
         }
 
@@ -139,7 +140,7 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
         });
 
         if (params.coin) {
-          const coin = (params.coin as string).toUpperCase();
+          const coin = normalizeCoin(params.coin as string);
           results = results.filter(r => r.coin === coin);
         }
 
@@ -181,7 +182,7 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
         }));
 
         if (params.coin) {
-          const coin = (params.coin as string).toUpperCase();
+          const coin = normalizeCoin(params.coin as string);
           markets = markets.filter(m => m.coin === coin);
         }
 
@@ -238,7 +239,8 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
                 const asset = dexData.meta.universe[i];
                 if (asset.name.toUpperCase().includes(query)) {
                   results.push({
-                    coin: `${dexData.dexName}:${asset.name}`,
+                    // API returns names already prefixed (e.g., "xyz:CL")
+                    coin: asset.name,
                     type: 'hip3',
                     dex: dexData.dexName,
                     markPx: dexData.assetCtxs[i]?.markPx,
@@ -315,7 +317,7 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
         let fills = await client.getUserFills();
 
         if (params.coin) {
-          const coin = (params.coin as string).toUpperCase();
+          const coin = normalizeCoin(params.coin as string);
           fills = fills.filter(f => f.coin === coin);
         }
         if (params.side) {
@@ -366,7 +368,7 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
         let orders = await client.getHistoricalOrders();
 
         if (params.coin) {
-          const coin = (params.coin as string).toUpperCase();
+          const coin = normalizeCoin(params.coin as string);
           orders = orders.filter(o => o.order.coin === coin);
         }
         if (params.status) {
@@ -485,7 +487,7 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
         const { getClient } = await import('../core/client.js');
         const client = getClient();
 
-        const coin = (params.coin as string).toUpperCase();
+        const coin = normalizeCoin(params.coin as string);
         const interval = (params.interval as string) || '1h';
         const bars = (params.bars as number) || 24;
 
@@ -533,7 +535,7 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
         const { annualizeFundingRate } = await import('../core/utils.js');
         const client = getClient();
 
-        const coin = (params.coin as string).toUpperCase();
+        const coin = normalizeCoin(params.coin as string);
         const hours = (params.hours as number) || 24;
         const startTime = Date.now() - (hours * 3_600_000);
 
@@ -574,7 +576,7 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
         const { getClient } = await import('../core/client.js');
         const client = getClient();
 
-        const coin = (params.coin as string).toUpperCase();
+        const coin = normalizeCoin(params.coin as string);
         // Load metadata for HIP-3 coin resolution
         await client.getMetaAndAssetCtxs();
         let trades = await client.getRecentTrades(coin);
@@ -673,7 +675,8 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
             if (openInterest < 100) continue;
 
             results.push({
-              coin: dexData.dexName ? `${dexData.dexName}:${asset.name}` : asset.name,
+              // API returns HIP-3 names already prefixed (e.g., "xyz:CL")
+              coin: asset.name,
               dex: dexData.dexName ?? 'main',
               annualizedPct: annualizedPct.toFixed(1),
               direction: hourlyRate > 0 ? 'longs pay shorts' : 'shorts pay longs',
@@ -742,7 +745,7 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
 
         if (client.isReadOnly) return error('Wallet not configured. Run "openbroker setup" first.');
 
-        const coin = (params.coin as string).toUpperCase();
+        const coin = normalizeCoin(params.coin as string);
         const size = params.size as number;
         const slippageBps = (params.slippage as number) ?? client.builderInfo.f;
 
@@ -791,7 +794,7 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
 
         if (client.isReadOnly) return error('Wallet not configured. Run "openbroker setup" first.');
 
-        const coin = (params.coin as string).toUpperCase();
+        const coin = normalizeCoin(params.coin as string);
         const size = params.size as number;
         const slippageBps = (params.slippage as number) ?? client.builderInfo.f;
 
@@ -843,7 +846,7 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
 
         if (client.isReadOnly) return error('Wallet not configured. Run "openbroker setup" first.');
 
-        const coin = (params.coin as string).toUpperCase();
+        const coin = normalizeCoin(params.coin as string);
         const isBuy = params.side === 'buy';
         const size = params.size as number;
         const price = params.price as number;
@@ -900,7 +903,7 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
 
         if (client.isReadOnly) return error('Wallet not configured. Run "openbroker setup" first.');
 
-        const coin = (params.coin as string).toUpperCase();
+        const coin = normalizeCoin(params.coin as string);
         const isBuy = params.side === 'buy';
         const size = params.size as number;
         const triggerPrice = params.trigger as number;
@@ -954,7 +957,7 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
         if (client.isReadOnly) return error('Wallet not configured. Run "openbroker setup" first.');
         if (!params.tp && !params.sl) return error('At least one of tp or sl is required.');
 
-        const coin = (params.coin as string).toUpperCase();
+        const coin = normalizeCoin(params.coin as string);
 
         // Get current position
         const state = await client.getUserState();
@@ -1028,12 +1031,12 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
         if (params.oid) {
           const coin = params.coin as string | undefined;
           if (!coin) return error('--coin is required when cancelling by order ID');
-          const result = await client.cancel(coin.toUpperCase(), params.oid as number);
-          return json({ action: 'cancel', coin: coin.toUpperCase(), oid: params.oid, result });
+          const result = await client.cancel(normalizeCoin(coin), params.oid as number);
+          return json({ action: 'cancel', coin: normalizeCoin(coin), oid: params.oid, result });
         }
 
         if (params.all || params.coin) {
-          const coin = params.coin ? (params.coin as string).toUpperCase() : undefined;
+          const coin = params.coin ? normalizeCoin(params.coin as string) : undefined;
           const results = await client.cancelAll(coin);
           return json({ action: 'cancelAll', coin: coin ?? 'all', results });
         }

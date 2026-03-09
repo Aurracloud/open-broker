@@ -120,6 +120,18 @@ export function parseArgs(args: string[]): Record<string, string | boolean> {
 }
 
 /**
+ * Normalize a coin name: uppercase the asset, keep dex prefix lowercase.
+ * "eth" → "ETH", "xyz:cl" → "xyz:CL", "xyz:CL" → "xyz:CL"
+ */
+export function normalizeCoin(coin: string): string {
+  const colonIdx = coin.indexOf(':');
+  if (colonIdx >= 0) {
+    return coin.slice(0, colonIdx).toLowerCase() + ':' + coin.slice(colonIdx + 1).toUpperCase();
+  }
+  return coin.toUpperCase();
+}
+
+/**
  * Sleep for specified milliseconds
  */
 export function sleep(ms: number): Promise<void> {

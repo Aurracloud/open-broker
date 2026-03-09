@@ -2,7 +2,7 @@
 // View OHLCV candle data from Hyperliquid
 
 import { getClient } from '../core/client.js';
-import { formatUsd, parseArgs } from '../core/utils.js';
+import { formatUsd, parseArgs, normalizeCoin } from '../core/utils.js';
 
 const VALID_INTERVALS = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '12h', '1d', '3d', '1w', '1M'];
 
@@ -61,7 +61,7 @@ async function main() {
   const bars = parseInt(args.bars as string) || 24;
   const client = getClient();
 
-  console.log(`Open Broker - ${coin.toUpperCase()} Candles (${interval})`);
+  console.log(`Open Broker - ${normalizeCoin(coin)} Candles (${interval})`);
   console.log('='.repeat(40) + '\n');
 
   try {
@@ -70,7 +70,7 @@ async function main() {
 
     const now = Date.now();
     const startTime = now - (bars * (INTERVAL_MS[interval] || 3_600_000));
-    const candles = await client.getCandleSnapshot(coin.toUpperCase(), interval, startTime);
+    const candles = await client.getCandleSnapshot(normalizeCoin(coin), interval, startTime);
 
     if (candles.length === 0) {
       console.log('No candle data found');

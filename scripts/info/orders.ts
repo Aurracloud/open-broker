@@ -2,7 +2,7 @@
 // View historical orders from Hyperliquid
 
 import { getClient } from '../core/client.js';
-import { formatUsd, parseArgs } from '../core/utils.js';
+import { formatUsd, parseArgs, normalizeCoin } from '../core/utils.js';
 
 function printUsage() {
   console.log(`
@@ -41,7 +41,7 @@ async function main() {
     let orders = await client.getHistoricalOrders();
 
     if (filterCoin) {
-      orders = orders.filter(o => o.order.coin === filterCoin.toUpperCase());
+      orders = orders.filter(o => o.order.coin === normalizeCoin(filterCoin));
     }
     if (filterStatus) {
       const s = filterStatus.toLowerCase();

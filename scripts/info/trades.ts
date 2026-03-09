@@ -2,7 +2,7 @@
 // View recent trades (tape) for an asset on Hyperliquid
 
 import { getClient } from '../core/client.js';
-import { formatUsd, parseArgs } from '../core/utils.js';
+import { formatUsd, parseArgs, normalizeCoin } from '../core/utils.js';
 
 function printUsage() {
   console.log(`
@@ -37,14 +37,14 @@ async function main() {
   const top = parseInt(args.top as string) || 30;
   const client = getClient();
 
-  console.log(`Open Broker - ${coin.toUpperCase()} Recent Trades`);
+  console.log(`Open Broker - ${normalizeCoin(coin)} Recent Trades`);
   console.log('='.repeat(40) + '\n');
 
   try {
     // Load metadata (needed for HIP-3 coin resolution)
     await client.getMetaAndAssetCtxs();
 
-    let trades = await client.getRecentTrades(coin.toUpperCase());
+    let trades = await client.getRecentTrades(normalizeCoin(coin));
 
     // Most recent first
     trades.sort((a, b) => b.time - a.time);

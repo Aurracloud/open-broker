@@ -68,8 +68,9 @@ async function main() {
           const ctx = dexData.assetCtxs[i];
           if (!ctx) continue;
 
-          const prefixedName = `${dexData.dexName}:${asset.name}`;
-          if (filterCoin && prefixedName !== filterCoin) continue;
+          // API returns names already prefixed (e.g., "xyz:CL")
+          const coinName = asset.name;
+          if (filterCoin && coinName !== filterCoin) continue;
 
           const hourlyRate = parseFloat(ctx.funding);
           const annualizedRate = annualizeFundingRate(hourlyRate);
@@ -79,7 +80,7 @@ async function main() {
           if (!showAll && openInterest < 1000) continue;
 
           fundingData.push({
-            coin: prefixedName,
+            coin: coinName,
             hourlyRate,
             annualizedRate,
             premium: 0,

@@ -2,7 +2,7 @@
 // View trade fill history from Hyperliquid
 
 import { getClient } from '../core/client.js';
-import { formatUsd, parseArgs } from '../core/utils.js';
+import { formatUsd, parseArgs, normalizeCoin } from '../core/utils.js';
 
 function printUsage() {
   console.log(`
@@ -41,7 +41,7 @@ async function main() {
     let fills = await client.getUserFills();
 
     if (filterCoin) {
-      fills = fills.filter(f => f.coin === filterCoin.toUpperCase());
+      fills = fills.filter(f => f.coin === normalizeCoin(filterCoin));
     }
     if (filterSide) {
       const sideCode = filterSide.toLowerCase() === 'buy' ? 'B' : 'A';

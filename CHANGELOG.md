@@ -2,6 +2,11 @@
 
 All notable changes to Open Broker will be documented in this file.
 
+## [1.0.51] - 2026-03-09
+
+### Added
+- **Watcher Poll Logging**: Position watcher now logs each poll cycle at debug level — shows position count, equity, and margin usage so you can confirm the watcher is running.
+
 ## [1.0.50] - 2026-03-09
 
 ### Fixed

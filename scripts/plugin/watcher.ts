@@ -120,6 +120,12 @@ export class PositionWatcher implements PluginService {
       const state = await client.getUserState(this.accountAddress);
 
       const snapshot = this.buildSnapshot(state);
+
+      const posCount = snapshot.positions.size;
+      const equity = parseFloat(snapshot.equity).toFixed(2);
+      const marginPct = snapshot.marginUsedPct.toFixed(1);
+      this.logger.debug(`Poll: ${posCount} position(s), equity $${equity}, margin ${marginPct}%`);
+
       const events = this.seeded ? this.detectEvents(snapshot) : [];
 
       if (events.length > 0) {
@@ -128,6 +134,8 @@ export class PositionWatcher implements PluginService {
           this.logger.info(`[${event.type}] ${event.message}`);
           await this.sendHook(event);
         }
+      } else if (this.seeded) {
+        this.logger.debug('No position changes detected');
       }
 
       this.previousSnapshot = snapshot;

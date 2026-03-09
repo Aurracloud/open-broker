@@ -41,6 +41,9 @@ async function main() {
   console.log('='.repeat(40) + '\n');
 
   try {
+    // Load metadata (needed for HIP-3 coin resolution)
+    await client.getMetaAndAssetCtxs();
+
     const now = Date.now();
     const startTime = now - (hours * 3_600_000);
     const history = await client.getFundingHistory(coin.toUpperCase(), startTime);

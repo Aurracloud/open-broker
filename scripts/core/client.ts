@@ -25,6 +25,12 @@ export class HyperliquidClient {
   private meta: MetaAndAssetCtxs | null = null;
   private assetMap: Map<string, number> = new Map();
   private szDecimalsMap: Map<string, number> = new Map();
+  /** Maps coin name → dex info for HIP-3 assets. Main dex assets have dexName=null */
+  private coinDexMap: Map<string, { dexName: string | null; dexIdx: number; localName: string }> = new Map();
+  /** Cache of perpDexs list */
+  private perpDexsCache: Array<{ name: string; fullName: string; deployer: string } | null> | null = null;
+  /** Whether HIP-3 assets have been loaded into maps */
+  private hip3Loaded: boolean = false;
   public verbose: boolean = false;
 
   constructor(config?: OpenBrokerConfig) {
@@ -106,18 +112,103 @@ export class HyperliquidClient {
       assetCtxs: response[1],
     };
 
-    // Build lookup maps
+    // Build lookup maps for main dex
     this.meta.meta.universe.forEach((asset, index) => {
       this.assetMap.set(asset.name, index);
       this.szDecimalsMap.set(asset.name, asset.szDecimals);
+      this.coinDexMap.set(asset.name, { dexName: null, dexIdx: 0, localName: asset.name });
     });
+
+    // Load HIP-3 dex assets (only once - maps persist across meta cache invalidation)
+    if (!this.hip3Loaded) {
+      await this.loadHip3Assets();
+      this.hip3Loaded = true;
+    }
 
     return this.meta;
   }
 
+  /**
+   * Load HIP-3 perp dex assets into the asset/szDecimals maps.
+   * Asset index formula: 10000 * dexIdx + assetIdx
+   * Coins are keyed as "dexName:COIN" (e.g., "xyz:CL")
+   */
+  private async loadHip3Assets(): Promise<void> {
+    try {
+      const dexs = await this.getPerpDexs();
+      const baseUrl = isMainnet()
+        ? 'https://api.hyperliquid.xyz'
+        : 'https://api.hyperliquid-testnet.xyz';
+
+      for (let dexIdx = 1; dexIdx < dexs.length; dexIdx++) {
+        const dex = dexs[dexIdx];
+        if (!dex) continue;
+
+        try {
+          const dexResponse = await fetch(baseUrl + '/info', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ type: 'metaAndAssetCtxs', dex: dex.name }),
+          });
+          const dexData = await dexResponse.json();
+
+          if (dexData && dexData[0]?.universe) {
+            const universe = dexData[0].universe as Array<{ name: string; szDecimals: number; maxLeverage: number; onlyIsolated?: boolean }>;
+            this.log(`Loading HIP-3 dex: ${dex.name} with ${universe.length} markets`);
+
+            universe.forEach((asset, assetIdx) => {
+              const prefixedName = `${dex.name}:${asset.name}`;
+              const globalIndex = 10000 * dexIdx + assetIdx;
+
+              this.assetMap.set(prefixedName, globalIndex);
+              this.szDecimalsMap.set(prefixedName, asset.szDecimals);
+              this.coinDexMap.set(prefixedName, { dexName: dex.name, dexIdx, localName: asset.name });
+            });
+          }
+        } catch (e) {
+          this.log(`Failed to load HIP-3 dex ${dex.name}:`, e);
+        }
+      }
+    } catch (e) {
+      this.log('Failed to load HIP-3 assets:', e);
+    }
+  }
+
   async getAllMids(): Promise<Record<string, string>> {
     this.log('Fetching allMids...');
-    const response = await this.info.allMids();
+    const response = await this.info.allMids() as Record<string, string>;
+
+    // Also fetch HIP-3 dex mids
+    try {
+      const dexs = await this.getPerpDexs();
+      const baseUrl = isMainnet()
+        ? 'https://api.hyperliquid.xyz'
+        : 'https://api.hyperliquid-testnet.xyz';
+
+      for (let i = 1; i < dexs.length; i++) {
+        const dex = dexs[i];
+        if (!dex) continue;
+
+        try {
+          const dexResponse = await fetch(baseUrl + '/info', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ type: 'allMids', dex: dex.name }),
+          });
+          const dexMids = await dexResponse.json() as Record<string, string>;
+
+          // Merge with prefixed keys
+          for (const [coin, mid] of Object.entries(dexMids)) {
+            response[`${dex.name}:${coin}`] = mid;
+          }
+        } catch (e) {
+          this.log(`Failed to fetch mids for HIP-3 dex ${dex.name}:`, e);
+        }
+      }
+    } catch (e) {
+      this.log('Failed to fetch HIP-3 mids:', e);
+    }
+
     return response;
   }
 
@@ -130,6 +221,8 @@ export class HyperliquidClient {
     fullName: string;
     deployer: string;
   } | null>> {
+    if (this.perpDexsCache) return this.perpDexsCache;
+
     this.log('Fetching perpDexs...');
     const baseUrl = isMainnet()
       ? 'https://api.hyperliquid.xyz'
@@ -142,6 +235,7 @@ export class HyperliquidClient {
     });
     const data = await response.json();
     this.log('perpDexs response:', JSON.stringify(data).slice(0, 500));
+    this.perpDexsCache = data;
     return data;
   }
 
@@ -412,7 +506,8 @@ export class HyperliquidClient {
     spreadBps: number;
   }> {
     this.log('Fetching l2Book for:', coin);
-    const response = await this.info.l2Book({ coin });
+    const localName = this.getCoinLocalName(coin);
+    const response = await this.info.l2Book({ coin: localName });
 
     const bids = response.levels[0] as Array<{ px: string; sz: string; n: number }>;
     const asks = response.levels[1] as Array<{ px: string; sz: string; n: number }>;
@@ -437,6 +532,15 @@ export class HyperliquidClient {
   getAssetIndex(coin: string): number {
     const index = this.assetMap.get(coin);
     if (index === undefined) {
+      // Check if bare name exists in HIP-3 dexes and suggest prefixed version
+      const hip3Matches = this.findHip3Matches(coin);
+      if (hip3Matches.length > 0) {
+        const suggestions = hip3Matches.map(m => `${m}`).join(', ');
+        throw new Error(
+          `Unknown asset: ${coin}. Did you mean one of these HIP-3 assets? ${suggestions}\n` +
+          `Use "openbroker search --query ${coin}" to find the full ticker.`
+        );
+      }
       throw new Error(`Unknown asset: ${coin}. Available: ${Array.from(this.assetMap.keys()).slice(0, 10).join(', ')}...`);
     }
     return index;
@@ -445,9 +549,76 @@ export class HyperliquidClient {
   getSzDecimals(coin: string): number {
     const decimals = this.szDecimalsMap.get(coin);
     if (decimals === undefined) {
+      const hip3Matches = this.findHip3Matches(coin);
+      if (hip3Matches.length > 0) {
+        throw new Error(
+          `Unknown asset: ${coin}. Did you mean: ${hip3Matches.join(', ')}?`
+        );
+      }
       throw new Error(`Unknown asset: ${coin}`);
     }
     return decimals;
+  }
+
+  /**
+   * Find HIP-3 assets matching a bare coin name (without dex prefix)
+   */
+  private findHip3Matches(bareName: string): string[] {
+    const matches: string[] = [];
+    const upperName = bareName.toUpperCase();
+    for (const [key, info] of this.coinDexMap.entries()) {
+      if (info.dexName && info.localName.toUpperCase() === upperName) {
+        matches.push(key);
+      }
+    }
+    return matches;
+  }
+
+  /**
+   * Get the dex name for a coin (null for main dex assets)
+   */
+  getCoinDex(coin: string): string | null {
+    return this.coinDexMap.get(coin)?.dexName ?? null;
+  }
+
+  /**
+   * Get the local (unprefixed) coin name for API calls that need it
+   * e.g., "xyz:CL" → "CL", "ETH" → "ETH"
+   */
+  getCoinLocalName(coin: string): string {
+    return this.coinDexMap.get(coin)?.localName ?? coin;
+  }
+
+  /**
+   * Check if a coin is a HIP-3 asset
+   */
+  isHip3(coin: string): boolean {
+    return this.coinDexMap.get(coin)?.dexName != null;
+  }
+
+  /**
+   * Invalidate cached metadata so next call fetches fresh data.
+   * Useful for long-running strategies that need updated funding rates.
+   */
+  invalidateMetaCache(): void {
+    this.meta = null;
+    // Keep the asset/szDecimals/coinDex maps - they don't change
+  }
+
+  /**
+   * Get all loaded asset names (main + HIP-3)
+   */
+  getAllAssetNames(): string[] {
+    return Array.from(this.assetMap.keys());
+  }
+
+  /**
+   * Get all HIP-3 asset names
+   */
+  getHip3AssetNames(): string[] {
+    return Array.from(this.coinDexMap.entries())
+      .filter(([_, info]) => info.dexName !== null)
+      .map(([name]) => name);
   }
 
   // ============ Account Info ============
@@ -783,8 +954,12 @@ export class HyperliquidClient {
       ? 'https://api.hyperliquid.xyz'
       : 'https://api.hyperliquid-testnet.xyz';
 
-    const req: Record<string, unknown> = { coin, interval, startTime };
+    const localName = this.getCoinLocalName(coin);
+    const dex = this.getCoinDex(coin);
+
+    const req: Record<string, unknown> = { coin: localName, interval, startTime };
     if (endTime !== undefined) req.endTime = endTime;
+    if (dex) req.dex = dex;
 
     const response = await fetch(baseUrl + '/info', {
       method: 'POST',
@@ -814,8 +989,12 @@ export class HyperliquidClient {
       ? 'https://api.hyperliquid.xyz'
       : 'https://api.hyperliquid-testnet.xyz';
 
-    const body: Record<string, unknown> = { type: 'fundingHistory', coin, startTime };
+    const localName = this.getCoinLocalName(coin);
+    const dex = this.getCoinDex(coin);
+
+    const body: Record<string, unknown> = { type: 'fundingHistory', coin: localName, startTime };
     if (endTime !== undefined) body.endTime = endTime;
+    if (dex) body.dex = dex;
 
     const response = await fetch(baseUrl + '/info', {
       method: 'POST',
@@ -844,10 +1023,16 @@ export class HyperliquidClient {
       ? 'https://api.hyperliquid.xyz'
       : 'https://api.hyperliquid-testnet.xyz';
 
+    const localName = this.getCoinLocalName(coin);
+    const dex = this.getCoinDex(coin);
+
+    const body: Record<string, unknown> = { type: 'recentTrades', coin: localName };
+    if (dex) body.dex = dex;
+
     const response = await fetch(baseUrl + '/info', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: 'recentTrades', coin }),
+      body: JSON.stringify(body),
     });
     const data = await response.json();
     this.log('recentTrades response length:', data?.length);

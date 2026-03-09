@@ -24,12 +24,14 @@ async function main() {
   console.log('===========================\n');
 
   const client = getClient();
+  const includeHip3 = args['include-hip3'] as boolean || args['hip3'] as boolean || (filterCoin?.includes(':') ?? false);
 
   try {
     const meta = await client.getMetaAndAssetCtxs();
 
     const fundingData: FundingDisplay[] = [];
 
+    // Main dex assets
     for (let i = 0; i < meta.meta.universe.length; i++) {
       const asset = meta.meta.universe[i];
       const ctx = meta.assetCtxs[i];
@@ -53,6 +55,39 @@ async function main() {
         openInterest,
         markPx,
       });
+    }
+
+    // Include HIP-3 dex assets
+    if (includeHip3 || showAll || (filterCoin && filterCoin.includes(':'))) {
+      const allPerps = await client.getAllPerpMetas();
+      for (const dexData of allPerps) {
+        if (!dexData.dexName) continue; // Skip main dex (already loaded)
+
+        for (let i = 0; i < dexData.meta.universe.length; i++) {
+          const asset = dexData.meta.universe[i];
+          const ctx = dexData.assetCtxs[i];
+          if (!ctx) continue;
+
+          const prefixedName = `${dexData.dexName}:${asset.name}`;
+          if (filterCoin && prefixedName !== filterCoin) continue;
+
+          const hourlyRate = parseFloat(ctx.funding);
+          const annualizedRate = annualizeFundingRate(hourlyRate);
+          const openInterest = parseFloat(ctx.openInterest);
+          const markPx = parseFloat(ctx.markPx);
+
+          if (!showAll && openInterest < 1000) continue;
+
+          fundingData.push({
+            coin: prefixedName,
+            hourlyRate,
+            annualizedRate,
+            premium: 0,
+            openInterest,
+            markPx,
+          });
+        }
+      }
     }
 
     // Sort

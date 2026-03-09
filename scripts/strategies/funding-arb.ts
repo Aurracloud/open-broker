@@ -95,11 +95,36 @@ async function main() {
   console.log('===============================\n');
 
   try {
-    // Initial funding check
+    // Initial funding check - loads main + HIP-3 assets
     await client.getMetaAndAssetCtxs();
-    const meta = await client.getMetaAndAssetCtxs();
-    const assetIndex = client.getAssetIndex(coin);
-    const assetCtx = meta.assetCtxs[assetIndex];
+
+    // For HIP-3 assets, we need to fetch funding from the dex-specific metadata
+    let hourlyFunding: number;
+    let openInterestVal: number;
+
+    if (client.isHip3(coin)) {
+      const allPerps = await client.getAllPerpMetas();
+      const dexName = client.getCoinDex(coin);
+      const localName = client.getCoinLocalName(coin);
+      const dexData = allPerps.find(d => d.dexName === dexName);
+      if (!dexData) {
+        console.error(`Error: No market data for HIP-3 dex ${dexName}`);
+        process.exit(1);
+      }
+      const assetIdx = dexData.meta.universe.findIndex(a => a.name === localName);
+      if (assetIdx === -1 || !dexData.assetCtxs[assetIdx]) {
+        console.error(`Error: No market data for ${coin}`);
+        process.exit(1);
+      }
+      hourlyFunding = parseFloat(dexData.assetCtxs[assetIdx].funding);
+      openInterestVal = parseFloat(dexData.assetCtxs[assetIdx].openInterest);
+    } else {
+      const meta = await client.getMetaAndAssetCtxs();
+      const assetIndex = client.getAssetIndex(coin);
+      const assetCtx = meta.assetCtxs[assetIndex];
+      hourlyFunding = parseFloat(assetCtx.funding);
+      openInterestVal = parseFloat(assetCtx.openInterest);
+    }
 
     const mids = await client.getAllMids();
     const midPrice = parseFloat(mids[coin]);
@@ -108,9 +133,7 @@ async function main() {
       process.exit(1);
     }
 
-    const hourlyFunding = parseFloat(assetCtx.funding);
     const annualizedFunding = annualizeFundingRate(hourlyFunding) * 100; // as percentage
-    const openInterest = parseFloat(assetCtx.openInterest);
     const positionSize = notionalSize / midPrice;
 
     console.log('Current Market State');
@@ -119,7 +142,7 @@ async function main() {
     console.log(`Mid Price:         ${formatUsd(midPrice)}`);
     console.log(`Hourly Funding:    ${(hourlyFunding * 100).toFixed(4)}%`);
     console.log(`Annualized:        ${annualizedFunding.toFixed(2)}%`);
-    console.log(`Open Interest:     ${formatUsd(openInterest)}`);
+    console.log(`Open Interest:     ${formatUsd(openInterestVal)}`);
     console.log(`\nStrategy Config`);
     console.log('---------------');
     console.log(`Target Notional:   ${formatUsd(notionalSize)}`);
@@ -218,9 +241,19 @@ async function main() {
         await sleep(checkInterval);
 
         // Get updated funding
-        const newMeta = await client.getMetaAndAssetCtxs();
-        const newAssetCtx = newMeta.assetCtxs[assetIndex];
-        const newHourlyFunding = parseFloat(newAssetCtx.funding);
+        let newHourlyFunding: number;
+        if (client.isHip3(coin)) {
+          const freshPerps = await client.getAllPerpMetas();
+          const dexName = client.getCoinDex(coin);
+          const localName = client.getCoinLocalName(coin);
+          const dexData = freshPerps.find(d => d.dexName === dexName);
+          const idx = dexData?.meta.universe.findIndex(a => a.name === localName) ?? -1;
+          newHourlyFunding = idx >= 0 && dexData?.assetCtxs[idx] ? parseFloat(dexData.assetCtxs[idx].funding) : 0;
+        } else {
+          const newMeta = await client.getMetaAndAssetCtxs();
+          const assetIndex = client.getAssetIndex(coin);
+          newHourlyFunding = parseFloat(newMeta.assetCtxs[assetIndex].funding);
+        }
         const newAnnualized = annualizeFundingRate(newHourlyFunding) * 100;
         const newMids = await client.getAllMids();
         const newPrice = parseFloat(newMids[coin]);

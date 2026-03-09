@@ -26,6 +26,7 @@ async function main() {
   console.log('=====================\n');
 
   const client = getClient();
+  const includeHip3 = args['include-hip3'] as boolean || args['hip3'] as boolean || (filterCoin?.includes(':') ?? false);
 
   try {
     const meta = await client.getMetaAndAssetCtxs();
@@ -57,6 +58,42 @@ async function main() {
         maxLeverage: asset.maxLeverage,
         szDecimals: asset.szDecimals,
       });
+    }
+
+    // Include HIP-3 markets
+    if (includeHip3 || (filterCoin && filterCoin.includes(':'))) {
+      const allPerps = await client.getAllPerpMetas();
+      for (const dexData of allPerps) {
+        if (!dexData.dexName) continue;
+
+        for (let i = 0; i < dexData.meta.universe.length; i++) {
+          const asset = dexData.meta.universe[i];
+          const ctx = dexData.assetCtxs[i];
+          if (!ctx) continue;
+
+          const prefixedName = `${dexData.dexName}:${asset.name}`;
+          if (filterCoin && prefixedName !== filterCoin) continue;
+
+          const markPx = parseFloat(ctx.markPx);
+          const oraclePx = parseFloat(ctx.oraclePx);
+          const prevDayPx = parseFloat(ctx.prevDayPx);
+          const volume24h = parseFloat(ctx.dayNtlVlm);
+          const openInterest = parseFloat(ctx.openInterest);
+          const change24h = prevDayPx > 0 ? (markPx - prevDayPx) / prevDayPx : 0;
+
+          markets.push({
+            coin: prefixedName,
+            markPx,
+            oraclePx,
+            prevDayPx,
+            change24h,
+            volume24h,
+            openInterest,
+            maxLeverage: asset.maxLeverage,
+            szDecimals: asset.szDecimals,
+          });
+        }
+      }
     }
 
     // Sort

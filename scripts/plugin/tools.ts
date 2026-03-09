@@ -228,6 +228,29 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
           }
         }
 
+        // Search HIP-3 perps
+        if (!typeFilter || typeFilter === 'hip3' || typeFilter === 'perp') {
+          try {
+            const allPerps = await client.getAllPerpMetas();
+            for (const dexData of allPerps) {
+              if (!dexData.dexName) continue; // Skip main dex (already searched)
+              for (let i = 0; i < dexData.meta.universe.length; i++) {
+                const asset = dexData.meta.universe[i];
+                if (asset.name.toUpperCase().includes(query)) {
+                  results.push({
+                    coin: `${dexData.dexName}:${asset.name}`,
+                    type: 'hip3',
+                    dex: dexData.dexName,
+                    markPx: dexData.assetCtxs[i]?.markPx,
+                    dayVolume: dexData.assetCtxs[i]?.dayNtlVlm,
+                    maxLeverage: asset.maxLeverage,
+                  });
+                }
+              }
+            }
+          } catch { /* HIP-3 may not be available */ }
+        }
+
         // Search spot
         if (!typeFilter || typeFilter === 'spot') {
           try {
@@ -472,6 +495,8 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
           '1d': 86_400_000, '3d': 259_200_000, '1w': 604_800_000, '1M': 2_592_000_000,
         };
 
+        // Load metadata for HIP-3 coin resolution
+        await client.getMetaAndAssetCtxs();
         const now = Date.now();
         const startTime = now - (bars * (intervalMs[interval] || 3_600_000));
         const candles = await client.getCandleSnapshot(coin, interval, startTime);
@@ -512,6 +537,8 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
         const hours = (params.hours as number) || 24;
         const startTime = Date.now() - (hours * 3_600_000);
 
+        // Load metadata for HIP-3 coin resolution
+        await client.getMetaAndAssetCtxs();
         const history = await client.getFundingHistory(coin, startTime);
 
         const rates = history.map(e => parseFloat(e.fundingRate));
@@ -548,6 +575,8 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
         const client = getClient();
 
         const coin = (params.coin as string).toUpperCase();
+        // Load metadata for HIP-3 coin resolution
+        await client.getMetaAndAssetCtxs();
         let trades = await client.getRecentTrades(coin);
 
         trades.sort((a, b) => b.time - a.time);
@@ -597,6 +626,97 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
           usagePercent: rl.nRequestsCap > 0 ? (rl.nRequestsUsed / rl.nRequestsCap * 100).toFixed(1) + '%' : '0%',
           cumulativeVolume: rl.cumVlm,
         });
+      },
+    },
+
+    {
+      name: 'ob_funding_scan',
+      description: 'Scan funding rates across all dexes (main + HIP-3) for arbitrage opportunities',
+      parameters: {
+        type: 'object',
+        properties: {
+          threshold: { type: 'number', description: 'Min annualized funding rate % to show (default: 25)' },
+          mainOnly: { type: 'boolean', description: 'Only scan main perps' },
+          hip3Only: { type: 'boolean', description: 'Only scan HIP-3 perps' },
+          top: { type: 'number', description: 'Number of results (default: 30)' },
+          pairs: { type: 'boolean', description: 'Show opposing funding pairs' },
+        },
+      },
+      async execute(_id, params) {
+        const { getClient } = await import('../core/client.js');
+        const { annualizeFundingRate } = await import('../core/utils.js');
+        const client = getClient();
+
+        const threshold = (params.threshold as number) ?? 25;
+        const mainOnly = params.mainOnly as boolean ?? false;
+        const hip3Only = params.hip3Only as boolean ?? false;
+        const topN = (params.top as number) ?? 30;
+
+        const allPerps = await client.getAllPerpMetas();
+        const results: Array<Record<string, unknown>> = [];
+
+        for (const dexData of allPerps) {
+          const isMain = !dexData.dexName;
+          if (mainOnly && !isMain) continue;
+          if (hip3Only && isMain) continue;
+
+          for (let i = 0; i < dexData.meta.universe.length; i++) {
+            const asset = dexData.meta.universe[i];
+            const ctx = dexData.assetCtxs[i];
+            if (!ctx) continue;
+
+            const hourlyRate = parseFloat(ctx.funding);
+            const annualizedPct = annualizeFundingRate(hourlyRate) * 100;
+            const openInterest = parseFloat(ctx.openInterest);
+
+            if (Math.abs(annualizedPct) < threshold) continue;
+            if (openInterest < 100) continue;
+
+            results.push({
+              coin: dexData.dexName ? `${dexData.dexName}:${asset.name}` : asset.name,
+              dex: dexData.dexName ?? 'main',
+              annualizedPct: annualizedPct.toFixed(1),
+              direction: hourlyRate > 0 ? 'longs pay shorts' : 'shorts pay longs',
+              collectBy: hourlyRate > 0 ? 'SHORT' : 'LONG',
+              openInterest: ctx.openInterest,
+              markPx: ctx.markPx,
+            });
+          }
+        }
+
+        results.sort((a, b) => Math.abs(parseFloat(b.annualizedPct as string)) - Math.abs(parseFloat(a.annualizedPct as string)));
+
+        const output: Record<string, unknown> = {
+          threshold,
+          scope: mainOnly ? 'main' : hip3Only ? 'hip3' : 'all',
+          results: results.slice(0, topN),
+        };
+
+        // Find opposing pairs if requested
+        if (params.pairs) {
+          const longs = results.filter(r => parseFloat(r.annualizedPct as string) > 0);
+          const shorts = results.filter(r => parseFloat(r.annualizedPct as string) < 0);
+          const pairs: Array<Record<string, unknown>> = [];
+
+          for (const l of longs) {
+            for (const s of shorts) {
+              const spread = parseFloat(l.annualizedPct as string) + Math.abs(parseFloat(s.annualizedPct as string));
+              if (spread > 20) {
+                pairs.push({
+                  short: l.coin,
+                  shortFunding: l.annualizedPct,
+                  long: s.coin,
+                  longFunding: s.annualizedPct,
+                  spreadPct: spread.toFixed(1),
+                });
+              }
+            }
+          }
+          pairs.sort((a, b) => parseFloat(b.spreadPct as string) - parseFloat(a.spreadPct as string));
+          output.opposingPairs = pairs.slice(0, 10);
+        }
+
+        return json(output);
       },
     },
 

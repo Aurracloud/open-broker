@@ -31,6 +31,7 @@ const commands: Record<string, { script: string; description: string }> = {
   'funding-history': { script: 'info/funding-history.ts', description: 'View historical funding rates' },
   'trades': { script: 'info/trades.ts', description: 'View recent trades for an asset' },
   'rate-limit': { script: 'info/rate-limit.ts', description: 'View API rate limit status' },
+  'funding-scan': { script: 'info/funding-scan.ts', description: 'Scan funding rates across all dexes' },
 
   // Operations
   'buy': { script: 'operations/market-order.ts', description: 'Market buy order' },
@@ -78,6 +79,7 @@ Info Commands:
   search               Search for assets across all providers
   spot                 View spot markets and balances
   rate-limit           View API rate limit status
+  funding-scan         Scan funding rates across all dexes (main + HIP-3)
 
 Trading Commands:
   buy                  Market buy order

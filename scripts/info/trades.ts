@@ -41,6 +41,9 @@ async function main() {
   console.log('='.repeat(40) + '\n');
 
   try {
+    // Load metadata (needed for HIP-3 coin resolution)
+    await client.getMetaAndAssetCtxs();
+
     let trades = await client.getRecentTrades(coin.toUpperCase());
 
     // Most recent first

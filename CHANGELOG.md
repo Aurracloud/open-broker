@@ -2,6 +2,16 @@
 
 All notable changes to Open Broker will be documented in this file.
 
+## [1.0.56] - 2026-03-10
+
+### Added
+- **Unified Account Support**: Detects and handles Hyperliquid's account abstraction modes (standard, unified, portfolio margin, dex abstraction)
+  - `getAccountMode()` / `isUnifiedAccount()` — queries `userAbstraction` API to detect mode
+  - **Unified accounts**: equity comes from `spotClearinghouseState` (single USDC balance shared across all dexes); skips `sendAsset` transfers for HIP-3 trading
+  - **Standard accounts**: keeps existing behavior (per-dex margin aggregation + USDC transfers)
+  - `account` command now displays the account abstraction mode
+- Prepares for deprecation of DEX abstraction mode per Hyperliquid docs
+
 ## [1.0.55] - 2026-03-09
 
 ### Added

@@ -35,6 +35,8 @@ export class HyperliquidClient {
   private hip3IsolatedSet: Set<string> = new Set();
   /** Cached maxLeverage for HIP-3 assets */
   private hip3MaxLeverageMap: Map<string, number> = new Map();
+  /** Cached account abstraction mode: 'standard' | 'unified' | 'portfolio' | 'dexAbstraction' */
+  private accountMode: string | null = null;
   public verbose: boolean = false;
 
   constructor(config?: OpenBrokerConfig) {
@@ -632,6 +634,57 @@ export class HyperliquidClient {
   // ============ Account Info ============
 
   /**
+   * Get the account's abstraction mode.
+   * Returns: 'standard' | 'unified' | 'portfolio' | 'dexAbstraction'
+   * Unified accounts have a single USDC balance shared across all dexes.
+   * Standard accounts have separate balances per dex (need sendAsset transfers).
+   */
+  async getAccountMode(user?: string): Promise<string> {
+    if (this.accountMode) return this.accountMode;
+
+    const baseUrl = isMainnet()
+      ? 'https://api.hyperliquid.xyz'
+      : 'https://api.hyperliquid-testnet.xyz';
+
+    try {
+      const response = await fetch(baseUrl + '/info', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'userAbstraction',
+          user: user ?? this.address,
+        }),
+      });
+      const data = await response.json();
+      this.log('userAbstraction response:', data);
+
+      // API returns: "default" | "disabled" | "dexAbstraction" | "unifiedAccount" | "portfolioMargin"
+      if (data === 'unifiedAccount') {
+        this.accountMode = 'unified';
+      } else if (data === 'portfolioMargin') {
+        this.accountMode = 'portfolio';
+      } else if (data === 'dexAbstraction') {
+        this.accountMode = 'dexAbstraction';
+      } else {
+        // "default" or "disabled" both mean standard mode
+        this.accountMode = 'standard';
+      }
+    } catch (err) {
+      this.log('Failed to fetch account abstraction mode:', err instanceof Error ? err.message : String(err));
+      this.accountMode = 'standard'; // Safe fallback
+    }
+
+    this.log('Account mode:', this.accountMode);
+    return this.accountMode;
+  }
+
+  /** Whether the account uses unified balances (unified or portfolio margin) */
+  async isUnifiedAccount(user?: string): Promise<boolean> {
+    const mode = await this.getAccountMode(user);
+    return mode === 'unified' || mode === 'portfolio';
+  }
+
+  /**
    * Check if an address has sub-accounts (is a master account)
    * Sub-accounts cannot approve builder fees - only master accounts can
    */
@@ -1075,14 +1128,17 @@ export class HyperliquidClient {
 
   /**
    * Get user state across all dexes (main + HIP-3).
-   * Merges HIP-3 positions into assetPositions and aggregates margin summaries.
+   * For unified accounts: equity comes from spotClearinghouseState (single USDC balance).
+   * For standard accounts: aggregates margin summaries from each dex.
    */
   async getUserStateAll(user?: string): Promise<ClearinghouseState> {
     await this.getMetaAndAssetCtxs(); // Ensure HIP-3 dex list is loaded
 
+    const unified = await this.isUnifiedAccount(user);
     const mainState = await this.getUserState(user);
     const dexs = await this.getPerpDexs();
 
+    // Collect positions from all HIP-3 dexes
     for (let i = 1; i < dexs.length; i++) {
       const dex = dexs[i];
       if (!dex) continue;
@@ -1093,21 +1149,60 @@ export class HyperliquidClient {
           mainState.assetPositions.push(...dexState.assetPositions);
         }
 
-        // Aggregate margin summaries from HIP-3 dexes
-        const dexMargin = dexState.marginSummary;
-        if (dexMargin) {
-          const addToSummary = (summary: { accountValue: string; totalNtlPos: string; totalRawUsd: string; totalMarginUsed: string; withdrawable: string }) => {
-            summary.accountValue = String(parseFloat(summary.accountValue) + parseFloat(dexMargin.accountValue));
-            summary.totalNtlPos = String(parseFloat(summary.totalNtlPos) + parseFloat(dexMargin.totalNtlPos));
-            summary.totalRawUsd = String(parseFloat(summary.totalRawUsd) + parseFloat(dexMargin.totalRawUsd));
-            summary.totalMarginUsed = String(parseFloat(summary.totalMarginUsed) + parseFloat(dexMargin.totalMarginUsed));
-            summary.withdrawable = String(parseFloat(summary.withdrawable) + parseFloat(dexMargin.withdrawable));
-          };
-          addToSummary(mainState.marginSummary);
-          addToSummary(mainState.crossMarginSummary);
+        // For standard accounts, aggregate margin from each dex
+        if (!unified) {
+          const dexMargin = dexState.marginSummary;
+          if (dexMargin) {
+            const addToSummary = (summary: { accountValue: string; totalNtlPos: string; totalRawUsd: string; totalMarginUsed: string; withdrawable: string }) => {
+              summary.accountValue = String(parseFloat(summary.accountValue) + parseFloat(dexMargin.accountValue));
+              summary.totalNtlPos = String(parseFloat(summary.totalNtlPos) + parseFloat(dexMargin.totalNtlPos));
+              summary.totalRawUsd = String(parseFloat(summary.totalRawUsd) + parseFloat(dexMargin.totalRawUsd));
+              summary.totalMarginUsed = String(parseFloat(summary.totalMarginUsed) + parseFloat(dexMargin.totalMarginUsed));
+              summary.withdrawable = String(parseFloat(summary.withdrawable) + parseFloat(dexMargin.withdrawable));
+            };
+            addToSummary(mainState.marginSummary);
+            addToSummary(mainState.crossMarginSummary);
+          }
         }
       } catch (err) {
         this.log(`Failed to fetch state for dex ${dex.name}:`, err instanceof Error ? err.message : String(err));
+      }
+    }
+
+    // For unified accounts: equity is the USDC balance from spot clearinghouse
+    if (unified) {
+      try {
+        const spotState = await this.getSpotBalances(user);
+        const usdcBalance = spotState.balances.find(b => b.coin === 'USDC');
+        if (usdcBalance) {
+          const totalUsdc = usdcBalance.total;
+          const holdUsdc = usdcBalance.hold;
+          const withdrawable = String(parseFloat(totalUsdc) - parseFloat(holdUsdc));
+
+          // Compute total margin used and notional from all positions
+          let totalMarginUsed = 0;
+          let totalNtlPos = 0;
+          for (const ap of mainState.assetPositions) {
+            const pos = ap.position;
+            if (parseFloat(pos.szi) === 0) continue;
+            totalMarginUsed += parseFloat(pos.marginUsed);
+            totalNtlPos += Math.abs(parseFloat(pos.positionValue));
+          }
+
+          const summary = {
+            accountValue: totalUsdc,
+            totalNtlPos: String(totalNtlPos),
+            totalRawUsd: totalUsdc,
+            totalMarginUsed: String(totalMarginUsed),
+            withdrawable,
+          };
+          mainState.marginSummary = summary;
+          mainState.crossMarginSummary = { ...summary };
+
+          this.log(`Unified account: USDC balance $${parseFloat(totalUsdc).toFixed(2)}, margin used $${totalMarginUsed.toFixed(2)}`);
+        }
+      } catch (err) {
+        this.log('Failed to fetch spot balances for unified account:', err instanceof Error ? err.message : String(err));
       }
     }
 
@@ -1123,9 +1218,10 @@ export class HyperliquidClient {
   // ============ Trading ============
 
   /**
-   * HIP-3 perps have independent margin per dex. Before ordering:
+   * HIP-3 perps: prepare for trading.
    * 1. Set isolated margin mode (required for HIP-3)
-   * 2. Transfer USDC from main perp to the HIP-3 dex (each dex has its own balance)
+   * 2. For standard accounts only: transfer USDC from main perp to HIP-3 dex
+   *    (unified accounts share USDC across all dexes automatically)
    */
   private async ensureHip3Ready(coin: string, notional: number, leverage?: number): Promise<void> {
     if (!this.isHip3(coin)) return;
@@ -1148,12 +1244,19 @@ export class HyperliquidClient {
       }
     }
 
-    // Transfer USDC to the HIP-3 dex to cover margin
+    // Unified accounts share USDC across all dexes — no transfer needed
+    const unified = await this.isUnifiedAccount();
+    if (unified) {
+      this.log(`Unified account — skipping USDC transfer for ${coin} (shared balance)`);
+      return;
+    }
+
+    // Standard accounts: transfer USDC to the HIP-3 dex to cover margin
     const requiredMargin = notional / effectiveLev;
     // Add 20% buffer for fees and slippage
     const transferAmount = Math.ceil(requiredMargin * 1.2 * 100) / 100;
 
-    this.log(`HIP-3 margin transfer: ${transferAmount} USDC from main → ${dexInfo.dexName} (notional: ${notional}, leverage: ${maxLev}x)`);
+    this.log(`HIP-3 margin transfer: ${transferAmount} USDC from main → ${dexInfo.dexName} (notional: ${notional}, leverage: ${effectiveLev}x)`);
     try {
       await this.exchange.sendAsset({
         destination: this.address as `0x${string}`,

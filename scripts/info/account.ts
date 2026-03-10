@@ -17,6 +17,15 @@ async function main() {
   console.log(`Signing Wallet:   ${client.walletAddress}`);
   console.log(`Wallet Type:      ${client.isApiWallet ? 'API Wallet' : 'Main Wallet'}`);
 
+  const accountMode = await client.getAccountMode();
+  const modeLabel: Record<string, string> = {
+    standard: 'Standard (separate balances per dex)',
+    unified: 'Unified Account (shared USDC across all dexes)',
+    portfolio: 'Portfolio Margin',
+    dexAbstraction: 'DEX Abstraction (deprecated)',
+  };
+  console.log(`Account Mode:     ${modeLabel[accountMode] ?? accountMode}`);
+
   // Check builder fee approval
   const builderApproval = await client.getMaxBuilderFee();
   console.log(`Builder Address:  ${client.builderAddress}`);

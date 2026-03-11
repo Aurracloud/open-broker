@@ -32,10 +32,8 @@ async function main() {
   const filterCoin = args.coin as string | undefined;
   const filterSide = args.side as string | undefined;
   const top = parseInt(args.top as string) || 20;
+  const jsonOutput = args.json as boolean;
   const client = getClient();
-
-  console.log('Open Broker - Trade Fills');
-  console.log('========================\n');
 
   try {
     let fills = await client.getUserFills();
@@ -51,6 +49,22 @@ async function main() {
     // Most recent first
     fills.sort((a, b) => b.time - a.time);
     fills = fills.slice(0, top);
+
+    if (jsonOutput) {
+      console.log(JSON.stringify(fills.map(f => ({
+        time: new Date(f.time).toISOString(),
+        coin: f.coin,
+        side: f.side === 'B' ? 'buy' : 'sell',
+        size: f.sz,
+        price: f.px,
+        fee: f.fee,
+        closedPnl: f.closedPnl,
+      })), null, 2));
+      return;
+    }
+
+    console.log('Open Broker - Trade Fills');
+    console.log('========================\n');
 
     if (fills.length === 0) {
       console.log('No fills found');

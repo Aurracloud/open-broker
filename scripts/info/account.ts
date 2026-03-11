@@ -6,37 +6,14 @@ import { formatUsd, formatPercent, parseArgs } from '../core/utils.js';
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  const jsonOutput = args.json as boolean;
   const client = getClient();
 
-  console.log('Open Broker - Account Info');
-  console.log('==========================\n');
-
-  console.log('Wallet Configuration');
-  console.log('--------------------');
-  console.log(`Trading Account:  ${client.address}`);
-  console.log(`Signing Wallet:   ${client.walletAddress}`);
-  console.log(`Wallet Type:      ${client.isApiWallet ? 'API Wallet' : 'Main Wallet'}`);
+  if (args.verbose) {
+    client.verbose = true;
+  }
 
   const accountMode = await client.getAccountMode();
-  const modeLabel: Record<string, string> = {
-    standard: 'Standard (separate balances per dex)',
-    unified: 'Unified Account (shared USDC across all dexes)',
-    portfolio: 'Portfolio Margin',
-    dexAbstraction: 'DEX Abstraction (deprecated)',
-  };
-  console.log(`Account Mode:     ${modeLabel[accountMode] ?? accountMode}`);
-
-  // Check builder fee approval
-  const builderApproval = await client.getMaxBuilderFee();
-  console.log(`Builder Address:  ${client.builderAddress}`);
-  console.log(`Builder Fee:      ${client.builderFeeBps} bps`);
-  if (builderApproval) {
-    console.log(`Builder Approved: ✅ Yes (max: ${builderApproval})`);
-  } else {
-    console.log(`Builder Approved: ❌ No`);
-    console.log(`\n⚠️  Run: npx tsx scripts/setup/approve-builder.ts`);
-  }
-  console.log('');
 
   try {
     const state = await client.getUserStateAll();
@@ -46,6 +23,93 @@ async function main() {
     const totalMarginUsed = parseFloat(margin.totalMarginUsed);
     const withdrawable = parseFloat(margin.withdrawable);
     const totalNotional = parseFloat(margin.totalNtlPos);
+
+    const positions = state.assetPositions
+      .filter(ap => Math.abs(parseFloat(ap.position.szi)) >= 0.0001)
+      .map(ap => {
+        const pos = ap.position;
+        const size = parseFloat(pos.szi);
+        const entryPx = parseFloat(pos.entryPx);
+        const notional = parseFloat(pos.positionValue);
+        const markPx = Math.abs(notional / size);
+        const pnl = parseFloat(pos.unrealizedPnl);
+        return {
+          coin: pos.coin,
+          side: size > 0 ? 'long' : 'short',
+          size: pos.szi,
+          entryPrice: pos.entryPx,
+          markPrice: markPx,
+          notional: Math.abs(notional),
+          unrealizedPnl: pnl,
+          leverage: `${pos.leverage.value}x ${pos.leverage.type}`,
+          liquidationPx: pos.liquidationPx,
+        };
+      });
+
+    const totalPnl = positions.reduce((sum, p) => sum + p.unrealizedPnl, 0);
+
+    // JSON output
+    if (jsonOutput) {
+      const result: Record<string, unknown> = {
+        address: client.address,
+        signingWallet: client.walletAddress,
+        walletType: client.isApiWallet ? 'api' : 'main',
+        accountMode,
+        equity: accountValue,
+        totalNotional,
+        totalMarginUsed,
+        withdrawable,
+        marginRatio: totalMarginUsed > 0 && accountValue > 0 ? totalMarginUsed / accountValue : 0,
+        totalUnrealizedPnl: totalPnl,
+        positions,
+      };
+
+      if (args.orders) {
+        const orders = await client.getOpenOrders();
+        result.openOrders = orders.map(o => ({
+          coin: o.coin,
+          oid: o.oid,
+          side: o.side === 'B' ? 'buy' : 'sell',
+          size: o.sz,
+          price: o.limitPx,
+          orderType: o.orderType,
+          timestamp: o.timestamp,
+        }));
+      }
+
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+
+    // Human-readable output
+    console.log('Open Broker - Account Info');
+    console.log('==========================\n');
+
+    console.log('Wallet Configuration');
+    console.log('--------------------');
+    console.log(`Trading Account:  ${client.address}`);
+    console.log(`Signing Wallet:   ${client.walletAddress}`);
+    console.log(`Wallet Type:      ${client.isApiWallet ? 'API Wallet' : 'Main Wallet'}`);
+
+    const modeLabel: Record<string, string> = {
+      standard: 'Standard (separate balances per dex)',
+      unified: 'Unified Account (shared USDC across all dexes)',
+      portfolio: 'Portfolio Margin',
+      dexAbstraction: 'DEX Abstraction (deprecated)',
+    };
+    console.log(`Account Mode:     ${modeLabel[accountMode] ?? accountMode}`);
+
+    // Check builder fee approval
+    const builderApproval = await client.getMaxBuilderFee();
+    console.log(`Builder Address:  ${client.builderAddress}`);
+    console.log(`Builder Fee:      ${client.builderFeeBps} bps`);
+    if (builderApproval) {
+      console.log(`Builder Approved: ✅ Yes (max: ${builderApproval})`);
+    } else {
+      console.log(`Builder Approved: ❌ No`);
+      console.log(`\n⚠️  Run: npx tsx scripts/setup/approve-builder.ts`);
+    }
+    console.log('');
 
     console.log('Margin Summary');
     console.log('--------------');
@@ -62,33 +126,18 @@ async function main() {
     console.log('\nPositions Summary');
     console.log('-----------------');
 
-    if (state.assetPositions.length === 0) {
+    if (positions.length === 0) {
       console.log('No open positions');
     } else {
-      let totalPnl = 0;
       console.log('Coin     | Size       | Entry      | Mark       | PnL        | Leverage');
       console.log('---------|------------|------------|------------|------------|----------');
 
-      for (const ap of state.assetPositions) {
-        const pos = ap.position;
-        const size = parseFloat(pos.szi);
-        if (Math.abs(size) < 0.0001) continue;
-
-        const entryPx = parseFloat(pos.entryPx);
-        const pnl = parseFloat(pos.unrealizedPnl);
-        totalPnl += pnl;
-
-        // Get mark price from leverage calculation
-        const notional = parseFloat(pos.positionValue);
-        const markPx = Math.abs(notional / size);
-
-        const side = size > 0 ? 'L' : 'S';
-        const leverageStr = `${pos.leverage.value}x ${pos.leverage.type}`;
-
+      for (const p of positions) {
+        const side = p.side === 'long' ? 'L' : 'S';
         console.log(
-          `${pos.coin.padEnd(8)} | ${side} ${Math.abs(size).toFixed(4).padStart(8)} | ` +
-          `${formatUsd(entryPx).padStart(10)} | ${formatUsd(markPx).padStart(10)} | ` +
-          `${formatUsd(pnl).padStart(10)} | ${leverageStr}`
+          `${p.coin.padEnd(8)} | ${side} ${Math.abs(parseFloat(p.size)).toFixed(4).padStart(8)} | ` +
+          `${formatUsd(parseFloat(p.entryPrice)).padStart(10)} | ${formatUsd(p.markPrice).padStart(10)} | ` +
+          `${formatUsd(p.unrealizedPnl).padStart(10)} | ${p.leverage}`
         );
       }
 

@@ -32,10 +32,8 @@ async function main() {
   const filterCoin = args.coin as string | undefined;
   const filterStatus = args.status as string | undefined;
   const top = parseInt(args.top as string) || 20;
+  const jsonOutput = args.json as boolean;
   const client = getClient();
-
-  console.log('Open Broker - Order History');
-  console.log('==========================\n');
 
   try {
     let orders = await client.getHistoricalOrders();
@@ -51,6 +49,23 @@ async function main() {
     // Most recent first
     orders.sort((a, b) => b.order.timestamp - a.order.timestamp);
     orders = orders.slice(0, top);
+
+    if (jsonOutput) {
+      console.log(JSON.stringify(orders.map(entry => ({
+        time: new Date(entry.order.timestamp).toISOString(),
+        coin: entry.order.coin,
+        side: entry.order.side === 'B' ? 'buy' : 'sell',
+        orderType: entry.order.orderType,
+        size: entry.order.sz,
+        price: entry.order.limitPx,
+        status: entry.status,
+        oid: entry.order.oid,
+      })), null, 2));
+      return;
+    }
+
+    console.log('Open Broker - Order History');
+    console.log('==========================\n');
 
     if (orders.length === 0) {
       console.log('No orders found');

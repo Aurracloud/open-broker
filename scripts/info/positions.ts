@@ -7,10 +7,12 @@ import { formatUsd, formatPercent, parseArgs } from '../core/utils.js';
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const filterCoin = args.coin as string | undefined;
+  const jsonOutput = args.json as boolean;
   const client = getClient();
 
-  console.log('Open Broker - Positions');
-  console.log('=======================\n');
+  if (args.verbose) {
+    client.verbose = true;
+  }
 
   try {
     const [state, mids, fundingHistory] = await Promise.all([
@@ -26,17 +28,50 @@ async function main() {
       return true;
     });
 
-    if (positions.length === 0) {
-      console.log(filterCoin ? `No position in ${filterCoin}` : 'No open positions');
-      return;
-    }
-
     // Sum cumulative funding per coin
     const fundingByCoin = new Map<string, number>();
     for (const entry of fundingHistory) {
       const coin = entry.delta.coin;
       const usdc = parseFloat(entry.delta.usdc);
       fundingByCoin.set(coin, (fundingByCoin.get(coin) ?? 0) + usdc);
+    }
+
+    // JSON output
+    if (jsonOutput) {
+      const result = positions.map(ap => {
+        const pos = ap.position;
+        const size = parseFloat(pos.szi);
+        const markPx = parseFloat(mids[pos.coin] || '0');
+        const liqPx = pos.liquidationPx ? parseFloat(pos.liquidationPx) : null;
+        return {
+          coin: pos.coin,
+          side: size > 0 ? 'long' : 'short',
+          size: pos.szi,
+          entryPrice: pos.entryPx,
+          markPrice: markPx,
+          notional: Math.abs(parseFloat(pos.positionValue)),
+          unrealizedPnl: parseFloat(pos.unrealizedPnl),
+          returnOnEquity: parseFloat(pos.returnOnEquity),
+          cumulativeFunding: fundingByCoin.get(pos.coin) ?? 0,
+          marginUsed: parseFloat(pos.marginUsed),
+          leverage: `${pos.leverage.value}x`,
+          leverageType: pos.leverage.type,
+          liquidationPrice: liqPx,
+          liquidationDistance: liqPx && markPx ? Math.abs((markPx - liqPx) / markPx) : null,
+          maxLeverage: pos.maxLeverage,
+        };
+      });
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+
+    // Human-readable output
+    console.log('Open Broker - Positions');
+    console.log('=======================\n');
+
+    if (positions.length === 0) {
+      console.log(filterCoin ? `No position in ${filterCoin}` : 'No open positions');
+      return;
     }
 
     for (const ap of positions) {

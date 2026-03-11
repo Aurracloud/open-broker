@@ -21,9 +21,7 @@ async function main() {
   const filterCoin = args.coin as string | undefined;
   const topN = parseInt(args.top as string) || 30;
   const sortBy = (args.sort as string) || 'volume'; // volume, oi, change
-
-  console.log('Open Broker - Markets');
-  console.log('=====================\n');
+  const jsonOutput = args.json as boolean;
 
   const client = getClient();
   const includeHip3 = args['include-hip3'] as boolean || args['hip3'] as boolean || (filterCoin?.includes(':') ?? false);
@@ -108,6 +106,14 @@ async function main() {
 
     // Limit
     const displayData = filterCoin ? markets : markets.slice(0, topN);
+
+    if (jsonOutput) {
+      console.log(JSON.stringify(displayData, null, 2));
+      return;
+    }
+
+    console.log('Open Broker - Markets');
+    console.log('=====================\n');
 
     if (displayData.length === 0) {
       console.log(filterCoin ? `No data for ${filterCoin}` : 'No market data available');

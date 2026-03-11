@@ -35,10 +35,12 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
         const { getClient } = await import('../core/client.js');
         const client = getClient();
         const state = await client.getUserStateAll();
+        const accountMode = await client.getAccountMode();
 
         const result: Record<string, unknown> = {
           address: client.address,
           isApiWallet: client.isApiWallet,
+          accountMode,
           equity: state.marginSummary.accountValue,
           totalNtlPos: state.marginSummary.totalNtlPos,
           totalMarginUsed: state.marginSummary.totalMarginUsed,

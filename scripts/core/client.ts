@@ -656,14 +656,17 @@ export class HyperliquidClient {
         }),
       });
       const data = await response.json();
-      this.log('userAbstraction response:', data);
+      this.log('userAbstraction response:', JSON.stringify(data));
 
-      // API returns: "default" | "disabled" | "dexAbstraction" | "unifiedAccount" | "portfolioMargin"
-      if (data === 'unifiedAccount') {
+      // API may return a bare string or an object. Normalize to string for matching.
+      const mode = typeof data === 'string' ? data : (data?.abstraction ?? data?.mode ?? String(data));
+      const modeLower = mode.toLowerCase();
+
+      if (modeLower.includes('unified')) {
         this.accountMode = 'unified';
-      } else if (data === 'portfolioMargin') {
+      } else if (modeLower.includes('portfolio')) {
         this.accountMode = 'portfolio';
-      } else if (data === 'dexAbstraction') {
+      } else if (modeLower.includes('dex')) {
         this.accountMode = 'dexAbstraction';
       } else {
         // "default" or "disabled" both mean standard mode
@@ -1173,7 +1176,12 @@ export class HyperliquidClient {
     if (unified) {
       try {
         const spotState = await this.getSpotBalances(user);
-        const usdcBalance = spotState.balances.find(b => b.coin === 'USDC');
+        this.log('Unified spot balances:', JSON.stringify(spotState));
+
+        // Find USDC balance (case-insensitive, handles variations)
+        const balances = spotState?.balances ?? [];
+        const usdcBalance = balances.find(b => b.coin?.toUpperCase() === 'USDC');
+
         if (usdcBalance) {
           const totalUsdc = usdcBalance.total;
           const holdUsdc = usdcBalance.hold;
@@ -1200,6 +1208,8 @@ export class HyperliquidClient {
           mainState.crossMarginSummary = { ...summary };
 
           this.log(`Unified account: USDC balance $${parseFloat(totalUsdc).toFixed(2)}, margin used $${totalMarginUsed.toFixed(2)}`);
+        } else {
+          this.log('Unified account: no USDC balance found in spot state. Balances:', balances.map(b => b.coin));
         }
       } catch (err) {
         this.log('Failed to fetch spot balances for unified account:', err instanceof Error ? err.message : String(err));

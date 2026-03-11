@@ -2,6 +2,20 @@
 
 All notable changes to Open Broker will be documented in this file.
 
+## [1.0.57] - 2026-03-10
+
+### Fixed
+- **Unified Account $0 Equity**: Made account mode detection more robust — handles wrapped API responses, case-insensitive matching. Added debug logging for spot balance lookup to diagnose edge cases. Plugin `ob_account` now returns `accountMode` field.
+
+### Added
+- **`--json` Flag**: Info commands now support `--json` for machine-readable output
+  - `account --json` — full account state as JSON
+  - `positions --json` — positions array with mark prices and liquidation distances
+  - `funding --json` — funding rate data
+  - `fills --json` — trade fill history
+  - `orders --json` — order history
+  - `markets --json` — market data
+
 ## [1.0.56] - 2026-03-10
 
 ### Added

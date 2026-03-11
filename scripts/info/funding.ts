@@ -19,9 +19,7 @@ async function main() {
   const filterCoin = args.coin as string | undefined;
   const sortBy = (args.sort as string) || 'annualized'; // annualized, hourly, oi
   const showAll = args.all as boolean;
-
-  console.log('Open Broker - Funding Rates');
-  console.log('===========================\n');
+  const jsonOutput = args.json as boolean;
 
   const client = getClient();
   const includeHip3 = args['include-hip3'] as boolean || args['hip3'] as boolean || (filterCoin?.includes(':') ?? false);
@@ -101,10 +99,18 @@ async function main() {
     // Limit
     const displayData = filterCoin ? fundingData : fundingData.slice(0, topN);
 
+    if (jsonOutput) {
+      console.log(JSON.stringify(displayData, null, 2));
+      return;
+    }
+
     if (displayData.length === 0) {
       console.log(filterCoin ? `No data for ${filterCoin}` : 'No funding data available');
       return;
     }
+
+    console.log('Open Broker - Funding Rates');
+    console.log('===========================\n');
 
     // Table header
     console.log('Coin     | Hourly Rate | Annualized |   Premium   | Open Interest |    Mark');

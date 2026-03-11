@@ -2,6 +2,24 @@
 
 All notable changes to Open Broker will be documented in this file.
 
+## [1.0.59] - 2026-03-11
+
+### Fixed
+- **Plugin Tools Parity with CLI**: Reviewed all plugin tools against CLI commands and aligned behavior
+  - **`ob_account`**: Now uses `crossMarginSummary` (matches CLI), includes `signingWallet`, `walletType`, `marginRatio`, translates order sides (`B`→`buy`, `A`→`sell`), adds `side` field to positions
+  - **`ob_positions`**: Now fetches mark prices (`getAllMids`) and cumulative funding (`getUserFunding`) in parallel — includes `markPrice`, `notional`, `cumulativeFunding`, `liquidationDistance`, `maxLeverage`, `leverageType` fields matching CLI output
+  - **`ob_markets`**: Now includes HIP-3 markets (was main dex only), adds `change24h` field, sorts by volume, includes `type` field (`perp`/`hip3`)
+  - **`ob_buy`/`ob_sell`**: Fixed default slippage — was using `builderInfo.f` (1 bps) instead of config default (50 bps), causing market orders to fail with price-too-far errors
+
+### Added
+- **SKILL.md CLI Fallback Guide**: Added troubleshooting section with plugin tool → CLI command mapping table, so agents can fall back to CLI when plugin tools return errors
+
+## [1.0.58] - 2026-03-11
+
+### Fixed
+- **`ob_funding` HIP-3 Support**: Rewrote plugin tool to use `getMetaAndAssetCtxs()` + `getAllPerpMetas()` instead of `getPredictedFundings()` which only returned main dex data. Now correctly returns funding rates for HIP-3 assets like `xyz:GOLD`. Fixes "Cannot read properties of null" crash.
+- **`ob_search` HIP-3 Filter**: Fixed inverted type filter condition — HIP-3 search was gated behind `typeFilter === 'perp'` instead of `typeFilter === 'hip3'`, causing empty results in some filter combinations. Added `funding` and `openInterest` fields to search results.
+
 ## [1.0.57] - 2026-03-10
 
 ### Fixed

@@ -4,7 +4,7 @@ description: Hyperliquid trading plugin with background position monitoring. Exe
 license: MIT
 compatibility: Requires Node.js 22+, network access to api.hyperliquid.xyz
 homepage: https://www.npmjs.com/package/openbroker
-metadata: {"author": "monemetrics", "version": "1.0.57", "openclaw": {"requires": {"bins": ["openbroker"], "env": ["HYPERLIQUID_PRIVATE_KEY"]}, "primaryEnv": "HYPERLIQUID_PRIVATE_KEY", "install": [{"id": "node", "kind": "node", "package": "openbroker", "bins": ["openbroker"], "label": "Install openbroker (npm)"}]}}
+metadata: {"author": "monemetrics", "version": "1.0.59", "openclaw": {"requires": {"bins": ["openbroker"], "env": ["HYPERLIQUID_PRIVATE_KEY"]}, "primaryEnv": "HYPERLIQUID_PRIVATE_KEY", "install": [{"id": "node", "kind": "node", "package": "openbroker", "bins": ["openbroker"], "label": "Install openbroker (npm)"}]}}
 allowed-tools: ob_account ob_positions ob_funding ob_markets ob_search ob_spot ob_fills ob_orders ob_order_status ob_fees ob_candles ob_funding_history ob_trades ob_rate_limit ob_funding_scan ob_buy ob_sell ob_limit ob_trigger ob_tpsl ob_cancel ob_twap ob_bracket ob_chase ob_watcher_status Bash(openbroker:*)
 ---
 
@@ -45,6 +45,34 @@ openbroker search --query NATGAS --type hip3  # HIP-3 only
 Or with the `ob_search` plugin tool: `{ "query": "gold" }` or `{ "query": "oil", "type": "hip3" }`
 
 **HIP-3 assets use `dex:COIN` format** — e.g., `xyz:CL` not just `CL`. If you get an error like "No market data found", search for the asset to find the correct prefixed ticker. Common HIP-3 dexes: `xyz`, `flx`, `km`, `hyna`, `vntl`, `cash`.
+
+## Troubleshooting: CLI Fallback
+
+If an `ob_*` plugin tool returns unexpected errors, empty results, or crashes, **fall back to the equivalent CLI command** via Bash. The CLI and plugin tools share the same core code, but the CLI has more mature error handling and output.
+
+| Plugin Tool | CLI Equivalent |
+|-------------|---------------|
+| `ob_account` | `openbroker account --json` |
+| `ob_positions` | `openbroker positions --json` |
+| `ob_funding` | `openbroker funding --json --include-hip3` |
+| `ob_markets` | `openbroker markets --json --include-hip3` |
+| `ob_search` | `openbroker search --query <QUERY>` |
+| `ob_buy` | `openbroker buy --coin <COIN> --size <SIZE>` |
+| `ob_sell` | `openbroker sell --coin <COIN> --size <SIZE>` |
+| `ob_limit` | `openbroker limit --coin <COIN> --side <SIDE> --size <SIZE> --price <PRICE>` |
+| `ob_tpsl` | `openbroker tpsl --coin <COIN> --tp <PRICE> --sl <PRICE>` |
+| `ob_cancel` | `openbroker cancel --all` or `--coin <COIN>` |
+| `ob_fills` | `openbroker fills --json` |
+| `ob_orders` | `openbroker orders --json` |
+| `ob_funding_scan` | `openbroker funding-scan --json` |
+| `ob_candles` | `openbroker candles --coin <COIN> --json` |
+
+**When to use CLI fallback:**
+- Plugin tool returns `null`, empty data, or throws an error
+- You need data the plugin tool doesn't expose (e.g., `--verbose` debug output)
+- Long-running operations (strategies, TWAP) — the CLI handles timeouts and progress better
+
+Add `--dry` to any trading CLI command to preview without executing. Add `--json` to info commands for structured output.
 
 ## Command Reference
 

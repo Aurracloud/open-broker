@@ -37,18 +37,25 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
         const state = await client.getUserStateAll();
         const accountMode = await client.getAccountMode();
 
+        const margin = state.crossMarginSummary;
+        const accountValue = parseFloat(margin.accountValue);
+        const totalMarginUsed = parseFloat(margin.totalMarginUsed);
+
         const result: Record<string, unknown> = {
           address: client.address,
-          isApiWallet: client.isApiWallet,
+          signingWallet: client.walletAddress,
+          walletType: client.isApiWallet ? 'api' : 'main',
           accountMode,
-          equity: state.marginSummary.accountValue,
-          totalNtlPos: state.marginSummary.totalNtlPos,
-          totalMarginUsed: state.marginSummary.totalMarginUsed,
-          withdrawable: state.marginSummary.withdrawable,
+          equity: margin.accountValue,
+          totalNtlPos: margin.totalNtlPos,
+          totalMarginUsed: margin.totalMarginUsed,
+          withdrawable: margin.withdrawable,
+          marginRatio: totalMarginUsed > 0 && accountValue > 0 ? totalMarginUsed / accountValue : 0,
           positions: state.assetPositions
             .filter(ap => parseFloat(ap.position.szi) !== 0)
             .map(ap => ({
               coin: ap.position.coin,
+              side: parseFloat(ap.position.szi) > 0 ? 'long' : 'short',
               size: ap.position.szi,
               entryPrice: ap.position.entryPx,
               positionValue: ap.position.positionValue,
@@ -63,7 +70,7 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
           result.openOrders = orders.map(o => ({
             coin: o.coin,
             oid: o.oid,
-            side: o.side,
+            side: o.side === 'B' ? 'buy' : 'sell',
             size: o.sz,
             price: o.limitPx,
             orderType: o.orderType,
@@ -87,22 +94,44 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
       async execute(_id, params) {
         const { getClient } = await import('../core/client.js');
         const client = getClient();
-        const state = await client.getUserStateAll();
+        const [state, mids, fundingHistory] = await Promise.all([
+          client.getUserStateAll(),
+          client.getAllMids(),
+          client.getUserFunding(),
+        ]);
+
+        // Sum cumulative funding per coin
+        const fundingByCoin = new Map<string, number>();
+        for (const entry of fundingHistory) {
+          const coin = entry.delta.coin;
+          const usdc = parseFloat(entry.delta.usdc);
+          fundingByCoin.set(coin, (fundingByCoin.get(coin) ?? 0) + usdc);
+        }
 
         let positions = state.assetPositions
           .filter(ap => parseFloat(ap.position.szi) !== 0)
-          .map(ap => ({
-            coin: ap.position.coin,
-            side: parseFloat(ap.position.szi) > 0 ? 'long' : 'short',
-            size: ap.position.szi,
-            entryPrice: ap.position.entryPx,
-            positionValue: ap.position.positionValue,
-            unrealizedPnl: ap.position.unrealizedPnl,
-            returnOnEquity: ap.position.returnOnEquity,
-            liquidationPx: ap.position.liquidationPx,
-            leverage: ap.position.leverage,
-            marginUsed: ap.position.marginUsed,
-          }));
+          .map(ap => {
+            const pos = ap.position;
+            const markPx = parseFloat(mids[pos.coin] || '0');
+            const liqPx = pos.liquidationPx ? parseFloat(pos.liquidationPx) : null;
+            return {
+              coin: pos.coin,
+              side: parseFloat(pos.szi) > 0 ? 'long' : 'short',
+              size: pos.szi,
+              entryPrice: pos.entryPx,
+              markPrice: markPx,
+              notional: Math.abs(parseFloat(pos.positionValue)),
+              unrealizedPnl: parseFloat(pos.unrealizedPnl),
+              returnOnEquity: parseFloat(pos.returnOnEquity),
+              cumulativeFunding: fundingByCoin.get(pos.coin) ?? 0,
+              marginUsed: parseFloat(pos.marginUsed),
+              leverage: `${pos.leverage.value}x`,
+              leverageType: pos.leverage.type,
+              liquidationPrice: liqPx,
+              liquidationDistance: liqPx && markPx ? Math.abs((markPx - liqPx) / markPx) : null,
+              maxLeverage: pos.maxLeverage,
+            };
+          });
 
         if (params.coin) {
           const coin = normalizeCoin(params.coin as string);
@@ -127,23 +156,59 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
         const { getClient } = await import('../core/client.js');
         const { annualizeFundingRate } = await import('../core/utils.js');
         const client = getClient();
-        const raw = await client.getPredictedFundings();
 
-        // raw is Array<[coin, Array<[venue, { fundingRate, nextFundingTime }]>]>
-        let results = raw.map(([coin, venues]) => {
-          // Use the first venue's funding rate
-          const rate = venues.length > 0 ? parseFloat(venues[0][1].fundingRate) : 0;
-          return {
-            coin,
-            fundingRate: rate,
-            annualizedRate: annualizeFundingRate(rate),
-            venues: venues.map(([venue, data]) => ({ venue, fundingRate: data.fundingRate })),
-          };
-        });
+        const filterCoin = params.coin ? normalizeCoin(params.coin as string) : undefined;
+        const includeHip3 = !filterCoin || filterCoin.includes(':');
 
-        if (params.coin) {
-          const coin = normalizeCoin(params.coin as string);
-          results = results.filter(r => r.coin === coin);
+        let results: Array<{ coin: string; fundingRate: number; annualizedRate: number; openInterest: string; markPx: string; type: string }> = [];
+
+        // Main dex funding from meta
+        try {
+          const { meta, assetCtxs } = await client.getMetaAndAssetCtxs();
+          for (let i = 0; i < meta.universe.length; i++) {
+            const asset = meta.universe[i];
+            const ctx = assetCtxs[i];
+            if (!ctx) continue;
+            if (filterCoin && asset.name !== filterCoin) continue;
+
+            const rate = parseFloat(ctx.funding);
+            results.push({
+              coin: asset.name,
+              fundingRate: rate,
+              annualizedRate: annualizeFundingRate(rate),
+              openInterest: ctx.openInterest,
+              markPx: ctx.markPx,
+              type: 'perp',
+            });
+          }
+        } catch { /* skip */ }
+
+        // HIP-3 dex funding
+        if (includeHip3) {
+          try {
+            const allPerps = await client.getAllPerpMetas();
+            for (let dexIdx = 1; dexIdx < allPerps.length; dexIdx++) {
+              const dexData = allPerps[dexIdx];
+              if (!dexData?.meta?.universe) continue;
+
+              for (let i = 0; i < dexData.meta.universe.length; i++) {
+                const asset = dexData.meta.universe[i];
+                const ctx = dexData.assetCtxs[i];
+                if (!asset || !ctx) continue;
+                if (filterCoin && asset.name !== filterCoin) continue;
+
+                const rate = parseFloat(ctx.funding);
+                results.push({
+                  coin: asset.name,
+                  fundingRate: rate,
+                  annualizedRate: annualizeFundingRate(rate),
+                  openInterest: ctx.openInterest,
+                  markPx: ctx.markPx,
+                  type: 'hip3',
+                });
+              }
+            }
+          } catch { /* skip */ }
         }
 
         results.sort((a, b) => Math.abs(b.annualizedRate) - Math.abs(a.annualizedRate));
@@ -157,7 +222,7 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
 
     {
       name: 'ob_markets',
-      description: 'View market data for Hyperliquid perpetuals (price, volume, open interest)',
+      description: 'View market data for Hyperliquid perpetuals (price, volume, open interest). Includes HIP-3 markets.',
       parameters: {
         type: 'object',
         properties: {
@@ -170,28 +235,75 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
         const client = getClient();
         const { meta, assetCtxs } = await client.getMetaAndAssetCtxs();
 
-        let markets = meta.universe.map((asset, i) => ({
-          coin: asset.name,
-          szDecimals: asset.szDecimals,
-          maxLeverage: asset.maxLeverage,
-          markPx: assetCtxs[i]?.markPx,
-          midPx: assetCtxs[i]?.midPx,
-          oraclePx: assetCtxs[i]?.oraclePx,
-          funding: assetCtxs[i]?.funding,
-          openInterest: assetCtxs[i]?.openInterest,
-          dayVolume: assetCtxs[i]?.dayNtlVlm,
-          prevDayPx: assetCtxs[i]?.prevDayPx,
-        }));
+        const filterCoin = params.coin ? normalizeCoin(params.coin as string) : undefined;
+        const includeHip3 = !filterCoin || filterCoin.includes(':');
 
-        if (params.coin) {
-          const coin = normalizeCoin(params.coin as string);
-          markets = markets.filter(m => m.coin === coin);
+        interface MarketEntry { coin: string; type: string; markPx: number; oraclePx: number; change24h: number; dayVolume: number; openInterest: number; maxLeverage: number; szDecimals: number; funding: string }
+
+        const markets: MarketEntry[] = [];
+
+        // Main dex
+        for (let i = 0; i < meta.universe.length; i++) {
+          const asset = meta.universe[i];
+          const ctx = assetCtxs[i];
+          if (!ctx) continue;
+          if (filterCoin && asset.name !== filterCoin) continue;
+
+          const markPx = parseFloat(ctx.markPx);
+          const prevDayPx = parseFloat(ctx.prevDayPx);
+          markets.push({
+            coin: asset.name,
+            type: 'perp',
+            markPx,
+            oraclePx: parseFloat(ctx.oraclePx),
+            change24h: prevDayPx > 0 ? (markPx - prevDayPx) / prevDayPx : 0,
+            dayVolume: parseFloat(ctx.dayNtlVlm),
+            openInterest: parseFloat(ctx.openInterest),
+            maxLeverage: asset.maxLeverage,
+            szDecimals: asset.szDecimals,
+            funding: ctx.funding,
+          });
         }
 
-        const top = (params.top as number) || 30;
-        markets = markets.slice(0, top);
+        // HIP-3 dexes
+        if (includeHip3) {
+          try {
+            const allPerps = await client.getAllPerpMetas();
+            for (let dexIdx = 1; dexIdx < allPerps.length; dexIdx++) {
+              const dexData = allPerps[dexIdx];
+              if (!dexData?.meta?.universe) continue;
+              for (let i = 0; i < dexData.meta.universe.length; i++) {
+                const asset = dexData.meta.universe[i];
+                const ctx = dexData.assetCtxs[i];
+                if (!asset || !ctx) continue;
+                if (filterCoin && asset.name !== filterCoin) continue;
 
-        return json({ markets });
+                const markPx = parseFloat(ctx.markPx);
+                const prevDayPx = parseFloat(ctx.prevDayPx);
+                markets.push({
+                  coin: asset.name,
+                  type: 'hip3',
+                  markPx,
+                  oraclePx: parseFloat(ctx.oraclePx),
+                  change24h: prevDayPx > 0 ? (markPx - prevDayPx) / prevDayPx : 0,
+                  dayVolume: parseFloat(ctx.dayNtlVlm),
+                  openInterest: parseFloat(ctx.openInterest),
+                  maxLeverage: asset.maxLeverage,
+                  szDecimals: asset.szDecimals,
+                  funding: ctx.funding,
+                });
+              }
+            }
+          } catch { /* skip */ }
+        }
+
+        // Sort by volume (matches CLI behavior)
+        markets.sort((a, b) => b.dayVolume - a.dayVolume);
+
+        const top = (params.top as number) || 30;
+        const result = filterCoin ? markets : markets.slice(0, top);
+
+        return json({ markets: result });
       },
     },
 
@@ -228,7 +340,9 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
                   coin: asset.name,
                   type: 'perp',
                   markPx: assetCtxs[i]?.markPx,
+                  funding: assetCtxs[i]?.funding,
                   dayVolume: assetCtxs[i]?.dayNtlVlm,
+                  openInterest: assetCtxs[i]?.openInterest,
                   maxLeverage: asset.maxLeverage,
                 });
               }
@@ -236,24 +350,26 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
           } catch (e) { errors.push(`perp: ${e instanceof Error ? e.message : String(e)}`); }
         }
 
-        // Search HIP-3 perps
-        if (!typeFilter || typeFilter === 'hip3' || typeFilter === 'perp') {
+        // Search HIP-3 perps (always included unless filtering to perp-only or spot-only)
+        if (!typeFilter || typeFilter === 'hip3') {
           try {
             const allPerps = await client.getAllPerpMetas();
             for (let dexIdx = 1; dexIdx < allPerps.length; dexIdx++) {
               const dexData = allPerps[dexIdx];
-              if (!dexData || !dexData.meta?.universe) continue;
+              if (!dexData?.meta?.universe) continue;
               for (let i = 0; i < dexData.meta.universe.length; i++) {
                 const asset = dexData.meta.universe[i];
+                const ctx = dexData.assetCtxs[i];
                 if (!asset) continue;
                 if (asset.name.toUpperCase().includes(query)) {
                   results.push({
-                    // API returns names already prefixed (e.g., "xyz:CL")
                     coin: asset.name,
                     type: 'hip3',
                     dex: dexData.dexName,
-                    markPx: dexData.assetCtxs[i]?.markPx,
-                    dayVolume: dexData.assetCtxs[i]?.dayNtlVlm,
+                    markPx: ctx?.markPx,
+                    funding: ctx?.funding,
+                    dayVolume: ctx?.dayNtlVlm,
+                    openInterest: ctx?.openInterest,
                     maxLeverage: asset.maxLeverage,
                   });
                 }
@@ -759,7 +875,7 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
 
         const coin = normalizeCoin(params.coin as string);
         const size = params.size as number;
-        const slippageBps = (params.slippage as number) ?? client.builderInfo.f;
+        const slippageBps = params.slippage as number | undefined;
         const leverage = params.leverage as number | undefined;
 
         const mids = await client.getAllMids();
@@ -768,7 +884,8 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
 
         const szDecimals = await client.getSzDecimals(coin);
         const roundedSize = roundSize(size, szDecimals);
-        const slippagePrice = getSlippagePrice(midPrice, true, slippageBps);
+        const effectiveSlippage = slippageBps ?? 50;
+        const slippagePrice = getSlippagePrice(midPrice, true, effectiveSlippage);
 
         if (params.dry) {
           return json({
@@ -778,7 +895,7 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
             size: roundedSize,
             midPrice,
             slippagePrice,
-            slippageBps,
+            slippageBps: effectiveSlippage,
             leverage,
           });
         }
@@ -811,7 +928,7 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
 
         const coin = normalizeCoin(params.coin as string);
         const size = params.size as number;
-        const slippageBps = (params.slippage as number) ?? client.builderInfo.f;
+        const slippageBps = params.slippage as number | undefined;
         const leverage = params.leverage as number | undefined;
 
         const mids = await client.getAllMids();
@@ -820,7 +937,8 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
 
         const szDecimals = await client.getSzDecimals(coin);
         const roundedSize = roundSize(size, szDecimals);
-        const slippagePrice = getSlippagePrice(midPrice, false, slippageBps);
+        const effectiveSlippage = slippageBps ?? 50;
+        const slippagePrice = getSlippagePrice(midPrice, false, effectiveSlippage);
 
         if (params.dry) {
           return json({
@@ -830,7 +948,7 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
             size: roundedSize,
             midPrice,
             slippagePrice,
-            slippageBps,
+            slippageBps: effectiveSlippage,
             leverage,
           });
         }

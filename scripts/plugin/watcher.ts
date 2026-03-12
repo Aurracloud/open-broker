@@ -284,6 +284,35 @@ export class PositionWatcher implements PluginService {
     return events;
   }
 
+  private buildHookMessage(event: PositionEvent): string {
+    const lines: string[] = [
+      `[OpenBroker Alert] ${this.formatEventHeadline(event)}`,
+      '',
+      'Details:',
+      ...Object.entries(event.details ?? {}).map(([k, v]) => `  ${k}: ${v}`),
+      '',
+      `Notify the user of this trading alert via their preferred channel.`,
+    ];
+    return lines.join('\n');
+  }
+
+  private formatEventHeadline(event: PositionEvent): string {
+    switch (event.type) {
+      case 'position_opened':
+        return `New ${event.details?.side ?? ''} position opened on ${event.coin}: ${Math.abs(parseFloat(String(event.details?.size ?? '0')))} ${event.coin} at $${event.details?.entryPrice}`;
+      case 'position_closed':
+        return `Position on ${event.coin} has been closed (was ${event.details?.previousSize} at $${event.details?.entryPrice}, last unrealized PnL: $${event.details?.lastPnl})`;
+      case 'position_size_changed':
+        return `Position on ${event.coin} size changed from ${event.details?.previousSize} to ${event.details?.newSize}`;
+      case 'pnl_threshold':
+        return `Significant PnL movement on ${event.coin}: $${Number(event.details?.previousPnl ?? 0).toFixed(2)} → $${Number(event.details?.currentPnl ?? 0).toFixed(2)} (${Number(event.details?.changePct ?? 0).toFixed(1)}% of position value)`;
+      case 'margin_warning':
+        return `Margin usage at ${Number(event.details?.marginUsedPct ?? 0).toFixed(1)}% — approaching risk threshold (equity: $${event.details?.equity}, margin used: $${event.details?.marginUsed})`;
+      default:
+        return event.message;
+    }
+  }
+
   private async sendHook(event: PositionEvent): Promise<void> {
     const port = this.gatewayPort || 18789;
 
@@ -302,7 +331,7 @@ export class PositionWatcher implements PluginService {
           'Authorization': `Bearer ${this.hooksToken}`,
         },
         body: JSON.stringify({
-          message: event.message,
+          message: this.buildHookMessage(event),
           name: `ob-${event.type}`,
           wakeMode: 'now',
         }),

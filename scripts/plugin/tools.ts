@@ -1299,5 +1299,92 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
         return json(watcher.getStatus());
       },
     },
+
+    // ── Automation Tools ──────────────────────────────────────────
+
+    {
+      name: 'ob_auto_run',
+      description: 'Start a trading automation script. Scripts are TypeScript files that export a default factory function with event handlers (price_change, funding_update, position_opened, etc.). Scripts are loaded from ~/.openbroker/automations/ or an absolute path.',
+      parameters: {
+        type: 'object',
+        properties: {
+          script: { type: 'string', description: 'Script name (from ~/.openbroker/automations/) or absolute path' },
+          id: { type: 'string', description: 'Custom automation ID (default: filename)' },
+          dry: { type: 'boolean', description: 'Intercept write methods — no real trades' },
+          poll: { type: 'number', description: 'Poll interval in milliseconds (default: 10000)' },
+        },
+        required: ['script'],
+      },
+      async execute(_id, params) {
+        try {
+          const { resolveScriptPath } = await import('../auto/loader.js');
+          const { startAutomation } = await import('../auto/runtime.js');
+
+          const scriptPath = resolveScriptPath(String(params.script));
+          const automation = await startAutomation({
+            scriptPath,
+            id: params.id ? String(params.id) : undefined,
+            dryRun: params.dry === true,
+            pollIntervalMs: params.poll ? Number(params.poll) : 10_000,
+          });
+
+          return json({
+            status: 'started',
+            id: automation.id,
+            scriptPath: automation.scriptPath,
+            dryRun: automation.dryRun,
+          });
+        } catch (err) {
+          return error(err instanceof Error ? err.message : String(err));
+        }
+      },
+    },
+
+    {
+      name: 'ob_auto_stop',
+      description: 'Stop a running trading automation by ID',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'Automation ID to stop' },
+        },
+        required: ['id'],
+      },
+      async execute(_id, params) {
+        try {
+          const { getAutomation } = await import('../auto/runtime.js');
+          const automation = getAutomation(String(params.id));
+          if (!automation) {
+            return error(`No running automation with ID "${params.id}"`);
+          }
+          await automation.stop();
+          return json({ status: 'stopped', id: params.id });
+        } catch (err) {
+          return error(err instanceof Error ? err.message : String(err));
+        }
+      },
+    },
+
+    {
+      name: 'ob_auto_list',
+      description: 'List available automation scripts and running automations',
+      parameters: { type: 'object', properties: {} },
+      async execute() {
+        const { listAutomations } = await import('../auto/loader.js');
+        const { getRunningAutomations } = await import('../auto/runtime.js');
+
+        const available = listAutomations();
+        const running = getRunningAutomations().map(a => ({
+          id: a.id,
+          scriptPath: a.scriptPath,
+          uptime: Math.round((Date.now() - a.startedAt.getTime()) / 1000),
+          pollCount: a.pollCount,
+          eventsEmitted: a.eventsEmitted,
+          dryRun: a.dryRun,
+        }));
+
+        return json({ available, running });
+      },
+    },
   ];
 }

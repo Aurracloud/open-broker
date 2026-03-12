@@ -52,6 +52,9 @@ const commands: Record<string, { script: string; description: string }> = {
   'dca': { script: 'strategies/dca.ts', description: 'DCA strategy' },
   'mm-spread': { script: 'strategies/mm-spread.ts', description: 'Market making (spread)' },
   'mm-maker': { script: 'strategies/mm-maker.ts', description: 'Market making (ALO)' },
+
+  // Automations
+  'auto': { script: 'auto/cli.ts', description: 'Run/manage trading automations' },
 };
 
 function printHelp() {
@@ -102,6 +105,11 @@ Strategies:
   dca                  Dollar cost averaging
   mm-spread            Market making (spread-based)
   mm-maker             Market making (ALO orders)
+
+Automations:
+  auto run <script>    Run a custom trading automation
+  auto list            List available automations
+  auto status          Show running automations
 
 Options:
   --help, -h           Show help for a command

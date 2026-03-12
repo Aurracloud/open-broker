@@ -4,7 +4,7 @@ description: Hyperliquid trading plugin with background position monitoring and 
 license: MIT
 compatibility: Requires Node.js 22+, network access to api.hyperliquid.xyz
 homepage: https://www.npmjs.com/package/openbroker
-metadata: {"author": "monemetrics", "version": "1.0.62", "openclaw": {"requires": {"bins": ["openbroker"], "env": ["HYPERLIQUID_PRIVATE_KEY"]}, "primaryEnv": "HYPERLIQUID_PRIVATE_KEY", "install": [{"id": "node", "kind": "node", "package": "openbroker", "bins": ["openbroker"], "label": "Install openbroker (npm)"}]}}
+metadata: {"author": "monemetrics", "version": "1.0.63", "openclaw": {"requires": {"bins": ["openbroker"], "env": ["HYPERLIQUID_PRIVATE_KEY"]}, "primaryEnv": "HYPERLIQUID_PRIVATE_KEY", "install": [{"id": "node", "kind": "node", "package": "openbroker", "bins": ["openbroker"], "label": "Install openbroker (npm)"}]}}
 allowed-tools: ob_account ob_positions ob_funding ob_markets ob_search ob_spot ob_fills ob_orders ob_order_status ob_fees ob_candles ob_funding_history ob_trades ob_rate_limit ob_funding_scan ob_buy ob_sell ob_limit ob_trigger ob_tpsl ob_cancel ob_twap ob_bracket ob_chase ob_watcher_status ob_auto_run ob_auto_stop ob_auto_list Bash(openbroker:*)
 ---
 
@@ -557,13 +557,207 @@ export default function(api) {
 | Event | Payload | When |
 |-------|---------|------|
 | `tick` | `{ timestamp, pollCount }` | Every poll cycle (default: 10s) |
-| `price_change` | `{ coin, oldPrice, newPrice, changePct }` | Mid price moved > 0.1% |
+| `price_change` | `{ coin, oldPrice, newPrice, changePct }` | Mid price moved > 0.01% between polls |
 | `funding_update` | `{ coin, fundingRate, annualized, premium }` | Every poll for all assets |
 | `position_opened` | `{ coin, side, size, entryPrice }` | New position detected |
 | `position_closed` | `{ coin, previousSize, entryPrice }` | Position no longer present |
 | `position_changed` | `{ coin, oldSize, newSize, entryPrice }` | Position size changed |
 | `pnl_threshold` | `{ coin, unrealizedPnl, changePct, positionValue }` | PnL moved > 5% of position value |
 | `margin_warning` | `{ marginUsedPct, equity, marginUsed }` | Margin usage > 80% |
+
+### Event Details — Choosing the Right Event
+
+#### `tick` — The universal heartbeat
+Fires **every single poll cycle** (default: 10s) regardless of market conditions. Use this when you need to check something on every poll — absolute price thresholds, custom conditions, periodic account checks. This is the most reliable event because it always fires.
+
+**Payload:** `{ timestamp: number, pollCount: number }`
+
+**When to use:**
+- Checking if a price is above/below an absolute threshold (e.g. "alert me when ETH < $3000")
+- Custom conditions that don't fit other events (e.g. "if I have no positions and funding is high, enter")
+- Periodic tasks that need to run every poll (though `api.every()` is better for longer intervals)
+
+**Example — absolute price alert:**
+```typescript
+api.on('tick', async () => {
+  const mids = await api.client.getAllMids();
+  const price = parseFloat(mids['HYPE']);
+  if (price < 38 && !api.state.get('alerted')) {
+    api.state.set('alerted', true);
+    await api.publish(`HYPE dropped below $38 — now at $${price.toFixed(3)}`);
+  }
+});
+```
+
+**Note:** `tick` does not include price data in its payload — you must fetch it yourself via `api.client.getAllMids()`. This is because tick fires before any other event processing. If you only care about price movements, use `price_change` instead.
+
+#### `price_change` — Relative price movements
+Fires when a coin's mid price moves **≥ 0.01%** compared to the previous poll. This filters out rounding noise while catching virtually any real price movement. The comparison is between consecutive polls (not from a fixed baseline), so it detects incremental changes.
+
+**Payload:** `{ coin: string, oldPrice: number, newPrice: number, changePct: number }`
+
+**When to use:**
+- Reacting to price movements (breakouts, momentum, mean reversion)
+- Monitoring specific coins for volatility
+- Building price-triggered entry/exit logic
+
+**When NOT to use:**
+- Checking if price is above/below a fixed threshold — use `tick` instead, because `price_change` only fires on relative movement between polls. During slow drifts (e.g. price slowly declining $0.001/s), the change between any two 10s polls may be < 0.01%, so the event won't fire even though the price has crossed your threshold.
+
+**Example — momentum detector:**
+```typescript
+api.on('price_change', async ({ coin, changePct, newPrice }) => {
+  if (coin !== 'ETH') return;
+  if (changePct > 0.5) {
+    api.log.info(`ETH surging +${changePct.toFixed(2)}% — price $${newPrice}`);
+    // Enter long on strong upward momentum
+  }
+});
+```
+
+#### `funding_update` — Funding rate data
+Fires **every poll** for **every asset** that has funding rate data. This is high-frequency — if there are 150 perp assets, this fires 150 times per poll. Filter by coin in your handler.
+
+**Payload:** `{ coin: string, fundingRate: number, annualized: number, premium: number }`
+- `fundingRate` — the raw hourly funding rate (e.g. 0.0001 = 0.01%/hr)
+- `annualized` — annualized rate (fundingRate × 8760 × 100, as a percentage)
+- `premium` — the premium component
+
+**When to use:**
+- Funding rate arbitrage strategies
+- Monitoring for extreme funding (entry/exit signals)
+- Scanning for highest/lowest funding across all assets
+
+**Example — funding scalp:**
+```typescript
+api.on('funding_update', async ({ coin, annualized }) => {
+  if (coin !== 'ETH') return;
+  if (annualized > 50 && !api.state.get('isShort')) {
+    api.log.info(`ETH funding at ${annualized.toFixed(1)}% annualized — shorting`);
+    await api.client.marketOrder('ETH', false, 0.1);
+    api.state.set('isShort', true);
+  }
+});
+```
+
+#### `position_opened` — New position detected
+Fires when a position appears that wasn't present in the previous poll. Useful for tracking entries made by other systems or confirming your own orders filled.
+
+**Payload:** `{ coin: string, side: 'long' | 'short', size: number, entryPrice: number }`
+
+**When to use:**
+- Setting TP/SL on new positions automatically
+- Logging/alerting when positions are opened (by you or another system)
+- Starting position-specific monitoring
+
+**Example — auto TP/SL on new positions:**
+```typescript
+api.on('position_opened', async ({ coin, side, size, entryPrice }) => {
+  const tpPrice = side === 'long' ? entryPrice * 1.05 : entryPrice * 0.95;
+  const slPrice = side === 'long' ? entryPrice * 0.97 : entryPrice * 1.03;
+  await api.client.takeProfit(coin, side !== 'long', size, tpPrice);
+  await api.client.stopLoss(coin, side !== 'long', size, slPrice);
+  api.log.info(`Set TP at ${tpPrice} / SL at ${slPrice} for ${coin}`);
+});
+```
+
+#### `position_closed` — Position gone
+Fires when a position that existed in the previous poll is no longer present. The position was either closed by you, liquidated, or filled by TP/SL.
+
+**Payload:** `{ coin: string, previousSize: number, entryPrice: number }`
+
+**When to use:**
+- Logging/alerting when positions close
+- Cleaning up related orders or state
+- Re-entry logic after a position closes
+
+**Example:**
+```typescript
+api.on('position_closed', async ({ coin, previousSize, entryPrice }) => {
+  api.log.info(`${coin} position closed (was ${previousSize} @ ${entryPrice})`);
+  api.state.delete(`${coin}_tp`);
+  await api.publish(`Position closed: ${coin} (entry: $${entryPrice})`);
+});
+```
+
+#### `position_changed` — Size or direction changed
+Fires when an existing position's size changes (partial close, add to position, or flip direction). Does NOT fire when a new position opens or an existing one fully closes — use `position_opened` and `position_closed` for those.
+
+**Payload:** `{ coin: string, oldSize: number, newSize: number, entryPrice: number }`
+- `oldSize`/`newSize` are signed: positive = long, negative = short
+
+**When to use:**
+- Detecting partial closes or position scaling
+- Adjusting TP/SL when position size changes
+- Tracking DCA entries
+
+**Example:**
+```typescript
+api.on('position_changed', async ({ coin, oldSize, newSize }) => {
+  if (Math.abs(newSize) > Math.abs(oldSize)) {
+    api.log.info(`${coin} position increased: ${oldSize} → ${newSize}`);
+  } else {
+    api.log.info(`${coin} position reduced: ${oldSize} → ${newSize}`);
+  }
+});
+```
+
+#### `pnl_threshold` — Significant PnL movement
+Fires when unrealized PnL changes by **≥ 5% of position value** between consecutive polls. This is a large move detector — useful for risk management alerts rather than routine monitoring.
+
+**Payload:** `{ coin: string, unrealizedPnl: number, changePct: number, positionValue: number }`
+- `changePct` — the PnL change as a percentage of total position value (not % of PnL itself)
+
+**When to use:**
+- Risk alerts for large PnL swings
+- Auto-close or reduce positions on sudden adverse moves
+- Escalating alerts to the user via `api.publish()`
+
+**Example:**
+```typescript
+api.on('pnl_threshold', async ({ coin, unrealizedPnl, changePct }) => {
+  if (unrealizedPnl < 0) {
+    await api.publish(
+      `⚠️ ${coin} PnL dropped sharply: $${unrealizedPnl.toFixed(2)} (${changePct.toFixed(1)}% of position)`,
+      { name: 'pnl-alert' },
+    );
+  }
+});
+```
+
+#### `margin_warning` — High margin usage
+Fires when margin usage exceeds **80%** of equity. After the first trigger, it only fires again if margin usage increases by another 5 percentage points (prevents spam). Resets when margin drops back below 80%.
+
+**Payload:** `{ marginUsedPct: number, equity: number, marginUsed: number }`
+
+**When to use:**
+- Automated risk reduction (close smallest position to free margin)
+- Alerting the user before liquidation risk
+- Pausing new entries when margin is high
+
+**Example:**
+```typescript
+api.on('margin_warning', async ({ marginUsedPct, equity }) => {
+  await api.publish(
+    `🚨 Margin at ${marginUsedPct.toFixed(1)}% — equity: $${equity.toFixed(2)}. Consider reducing exposure.`,
+    { name: 'margin-alert' },
+  );
+});
+```
+
+### Choosing the Right Event — Quick Guide
+
+| Use case | Best event | Why |
+|----------|-----------|-----|
+| Alert when price crosses a fixed level | `tick` | Fires every poll — no minimum change threshold |
+| React to price momentum/volatility | `price_change` | Provides relative change data between polls |
+| Funding rate strategy | `funding_update` | Gives annualized rate directly |
+| Auto TP/SL on new positions | `position_opened` | Fires exactly when a new position appears |
+| Log when positions close | `position_closed` | Fires when position disappears |
+| Track position scaling | `position_changed` | Fires on size changes only |
+| Risk management — PnL spikes | `pnl_threshold` | Only fires on large moves (≥5% of position value) |
+| Risk management — margin | `margin_warning` | Fires at 80%+ margin usage |
+| Periodic task (DCA, rebalance) | `api.every(ms, fn)` | Better than tick for longer intervals |
 
 ### Client Methods Available
 

@@ -341,7 +341,7 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
             const oldPrice = previousSnapshot.prices.get(coin);
             if (oldPrice === undefined || oldPrice === 0) continue;
             const changePct = ((newPrice - oldPrice) / oldPrice) * 100;
-            if (Math.abs(changePct) >= 0.1) { // 0.1% minimum to fire
+            if (Math.abs(changePct) >= 0.01) { // 0.01% minimum to fire (filters rounding noise)
               const errors = await eventBus.emit('price_change', { coin, oldPrice, newPrice, changePct });
               if (errors.length) await handleErrors(errors);
               eventsEmitted++;

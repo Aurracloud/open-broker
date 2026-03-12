@@ -2,7 +2,8 @@
 
 import { parseArgs } from '../core/utils.js';
 import { resolveScriptPath, listAutomations, ensureAutomationsDir } from './loader.js';
-import { startAutomation, getRunningAutomations } from './runtime.js';
+import { startAutomation, getRunningAutomations, getRegisteredAutomations } from './runtime.js';
+import { unregisterAutomation, cleanRegistry } from './registry.js';
 
 function printUsage() {
   console.log(`
@@ -10,8 +11,10 @@ OpenBroker Automations — event-driven trading scripts
 
 Usage:
   openbroker auto run <script> [options]    Run an automation script
+  openbroker auto stop <id>                 Unregister an automation (won't restart)
   openbroker auto list                      List available automations
   openbroker auto status                    Show running automations
+  openbroker auto clean                     Remove stale entries from registry
 
 Options (for run):
   --dry              Intercept write methods (no real trades)
@@ -100,24 +103,82 @@ function listCommand() {
 }
 
 function statusCommand() {
-  const running = getRunningAutomations();
+  // Show in-process automations (if any running in this process)
+  const inProcess = getRunningAutomations();
 
-  if (running.length === 0) {
+  // Show all registered automations from file-based registry (cross-process)
+  const registered = getRegisteredAutomations();
+
+  if (inProcess.length === 0 && registered.length === 0) {
     console.log('No automations running');
     return;
   }
 
-  console.log('Running automations:\n');
-  for (const a of running) {
-    const uptime = Math.round((Date.now() - a.startedAt.getTime()) / 1000);
-    console.log(`  ${a.id}`);
-    console.log(`    Script:  ${a.scriptPath}`);
-    console.log(`    Uptime:  ${uptime}s`);
-    console.log(`    Polls:   ${a.pollCount}`);
-    console.log(`    Events:  ${a.eventsEmitted}`);
-    console.log(`    Dry run: ${a.dryRun}`);
-    console.log('');
+  // Show in-process automations with live stats
+  if (inProcess.length > 0) {
+    console.log('Running in this process:\n');
+    for (const a of inProcess) {
+      const uptime = Math.round((Date.now() - a.startedAt.getTime()) / 1000);
+      console.log(`  ${a.id}`);
+      console.log(`    Script:  ${a.scriptPath}`);
+      console.log(`    Uptime:  ${uptime}s`);
+      console.log(`    Polls:   ${a.pollCount}`);
+      console.log(`    Events:  ${a.eventsEmitted}`);
+      console.log(`    Dry run: ${a.dryRun}`);
+      console.log('');
+    }
   }
+
+  // Show all registered automations (may include ones from other processes)
+  const external = registered.filter(
+    r => !inProcess.some(ip => ip.id === r.id),
+  );
+
+  if (external.length > 0) {
+    if (inProcess.length > 0) console.log('Other processes:\n');
+    else console.log('Registered automations:\n');
+
+    for (const a of external) {
+      const uptime = a.status === 'running'
+        ? `${Math.round((Date.now() - new Date(a.startedAt).getTime()) / 1000)}s`
+        : '-';
+      console.log(`  ${a.id}`);
+      console.log(`    Script:  ${a.scriptPath}`);
+      console.log(`    Status:  ${a.status}${a.error ? ` (${a.error})` : ''}`);
+      console.log(`    PID:     ${a.pid}`);
+      console.log(`    Uptime:  ${uptime}`);
+      console.log(`    Dry run: ${a.dryRun}`);
+      console.log('');
+    }
+  }
+}
+
+function stopCommand(positional: string[]) {
+  const id = positional[0];
+  if (!id) {
+    console.error('Error: automation ID required');
+    console.log('Usage: openbroker auto stop <id>');
+    process.exit(1);
+  }
+
+  // Check if running in this process
+  const inProcess = getRunningAutomations();
+  const running = inProcess.find(a => a.id === id);
+  if (running) {
+    running.stop().then(() => {
+      console.log(`Stopped and unregistered: ${id}`);
+    });
+    return;
+  }
+
+  // Otherwise just remove from file registry (prevents restart)
+  unregisterAutomation(id);
+  console.log(`Unregistered: ${id} (will not restart on next gateway start)`);
+}
+
+function cleanCommand() {
+  cleanRegistry();
+  console.log('Cleaned stale entries from registry');
 }
 
 async function main() {
@@ -153,11 +214,17 @@ async function main() {
     case 'run':
       await runCommand(args, positional);
       break;
+    case 'stop':
+      stopCommand(positional);
+      break;
     case 'list':
       listCommand();
       break;
     case 'status':
       statusCommand();
+      break;
+    case 'clean':
+      cleanCommand();
       break;
     default:
       console.error(`Unknown subcommand: ${subcommand}`);

@@ -52,6 +52,19 @@ export interface AutomationLogger {
   debug(message: string): void;
 }
 
+// ── Publish (webhook) ───────────────────────────────────────────────
+
+export interface PublishOptions {
+  /** Human-readable name for the hook (appears in logs). Default: "ob-auto-<id>" */
+  name?: string;
+  /** Wake mode: "now" triggers immediate agent turn, "next-heartbeat" queues. Default: "now" */
+  wakeMode?: 'now' | 'next-heartbeat';
+  /** Whether to deliver the agent response to messaging channels. Default: true */
+  deliver?: boolean;
+  /** Target channel (e.g. "slack", "telegram", "last"). Default: agent decides */
+  channel?: string;
+}
+
 // ── Core API ────────────────────────────────────────────────────────
 
 export interface AutomationAPI {
@@ -83,6 +96,17 @@ export interface AutomationAPI {
 
   /** Called when a handler throws. The error is already logged — use this for recovery logic. */
   onError(handler: (error: Error) => void | Promise<void>): void;
+
+  /**
+   * Publish a message to the OpenClaw agent via webhook.
+   * Sends to POST /hooks/agent on the local gateway, triggering an agent turn.
+   * The agent receives the message and can act on it (notify user, trade, etc.).
+   *
+   * @param message — The message string the agent will receive
+   * @param options — Optional: name, wakeMode, deliver, channel
+   * @returns true if delivered, false if webhook is not configured
+   */
+  publish(message: string, options?: PublishOptions): Promise<boolean>;
 
   /** Persisted key-value state (~/.openbroker/state/<id>.json) */
   state: AutomationState;
@@ -134,5 +158,10 @@ export interface RunningAutomation {
   pollCount: number;
   eventsEmitted: number;
   dryRun: boolean;
-  stop: () => Promise<void>;
+  /**
+   * Stop the automation.
+   * @param opts.persist If false, keep the entry in the file registry so it
+   *   restarts when the gateway comes back up. Default: true (fully remove).
+   */
+  stop: (opts?: { persist?: boolean }) => Promise<void>;
 }

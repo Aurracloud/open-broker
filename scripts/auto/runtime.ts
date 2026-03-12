@@ -11,12 +11,14 @@ import {
 } from '../core/utils.js';
 import { AutomationEventBus } from './events.js';
 import { loadAutomation } from './loader.js';
+import { registerAutomation, unregisterAutomation, markAutomationError, getRegisteredAutomations as getRegisteredFromFile } from './registry.js';
 import type {
   AutomationAPI,
   AutomationLogger,
   AutomationState,
   AutomationSnapshot,
   PositionSnapshot,
+  PublishOptions,
   ScheduledTask,
   RunningAutomation,
 } from './types.js';
@@ -167,6 +169,56 @@ async function buildSnapshot(
   };
 }
 
+// ── Publish (webhook) ───────────────────────────────────────────────
+
+function createPublish(
+  automationId: string,
+  log: AutomationLogger,
+  gatewayPort?: number,
+  hooksToken?: string,
+): (message: string, options?: PublishOptions) => Promise<boolean> {
+  return async (message: string, options?: PublishOptions): Promise<boolean> => {
+    const token = hooksToken || process.env.OPENCLAW_HOOKS_TOKEN;
+    const port = gatewayPort || parseInt(process.env.OPENCLAW_GATEWAY_PORT || '18789', 10);
+
+    if (!token) {
+      log.debug('publish() skipped — no hooks token configured (set OPENCLAW_HOOKS_TOKEN or pass hooksToken in plugin config)');
+      return false;
+    }
+
+    const body: Record<string, unknown> = {
+      message,
+      name: options?.name || `ob-auto-${automationId}`,
+      wakeMode: options?.wakeMode || 'now',
+    };
+
+    if (options?.deliver !== undefined) body.deliver = options.deliver;
+    if (options?.channel) body.channel = options.channel;
+
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/hooks/agent`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify(body),
+      });
+
+      if (!res.ok) {
+        log.warn(`publish() failed: HTTP ${res.status} ${res.statusText}`);
+        return false;
+      }
+
+      log.debug(`publish() delivered to /hooks/agent (${message.length} chars)`);
+      return true;
+    } catch (err) {
+      log.warn(`publish() error: ${err instanceof Error ? err.message : String(err)}`);
+      return false;
+    }
+  };
+}
+
 // ── Runtime ─────────────────────────────────────────────────────────
 
 export interface RuntimeOptions {
@@ -175,6 +227,10 @@ export interface RuntimeOptions {
   dryRun?: boolean;
   verbose?: boolean;
   pollIntervalMs?: number;
+  /** Gateway port for webhook delivery. Falls back to OPENCLAW_GATEWAY_PORT or 18789 */
+  gatewayPort?: number;
+  /** Hooks token for webhook auth. Falls back to OPENCLAW_HOOKS_TOKEN */
+  hooksToken?: string;
 }
 
 /** Registry of all running automations */
@@ -188,12 +244,17 @@ export function getAutomation(id: string): RunningAutomation | undefined {
   return registry.get(id);
 }
 
+/** Get all automations from file-based registry (cross-process visibility) */
+export { getRegisteredFromFile as getRegisteredAutomations };
+
 export async function startAutomation(options: RuntimeOptions): Promise<RunningAutomation> {
   const {
     scriptPath,
     dryRun = false,
     verbose = false,
     pollIntervalMs = 10_000,
+    gatewayPort,
+    hooksToken,
   } = options;
 
   const id = options.id || path.basename(scriptPath, '.ts');
@@ -215,6 +276,7 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
   const scheduledTasks: ScheduledTask[] = [];
 
   // Build the API object
+  const publish = createPublish(id, log, gatewayPort, hooksToken);
   const api: AutomationAPI = {
     client,
     utils: { roundPrice, roundSize, sleep, normalizeCoin, formatUsd, formatPercent, annualizeFundingRate },
@@ -223,6 +285,7 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
     onStart: (handler) => startHooks.push(handler),
     onStop: (handler) => stopHooks.push(handler),
     onError: (handler) => errorHooks.push(handler),
+    publish,
     state,
     log,
     id,
@@ -416,7 +479,7 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
   await poll();
 
   // Stop function
-  async function stop() {
+  async function stop(opts?: { persist?: boolean }) {
     if (stopped) return;
     stopped = true;
     clearInterval(timer);
@@ -429,6 +492,12 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
 
     eventBus.removeAll();
     registry.delete(id);
+
+    // persist defaults to true — fully remove from file registry.
+    // When false (gateway shutdown), keep the entry so it restarts next time.
+    if (opts?.persist !== false) {
+      unregisterAutomation(id);
+    }
     log.info(`Stopped (${pollCount} polls, ${eventsEmitted} events)`);
   }
 
@@ -443,5 +512,15 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
   };
 
   registry.set(id, entry);
+
+  // Persist to file-based registry so other processes (CLI, plugin) can see it
+  registerAutomation({
+    id,
+    scriptPath,
+    dryRun,
+    verbose,
+    pollIntervalMs,
+  });
+
   return entry;
 }

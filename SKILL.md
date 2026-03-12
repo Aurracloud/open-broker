@@ -4,7 +4,7 @@ description: Hyperliquid trading plugin with background position monitoring and 
 license: MIT
 compatibility: Requires Node.js 22+, network access to api.hyperliquid.xyz
 homepage: https://www.npmjs.com/package/openbroker
-metadata: {"author": "monemetrics", "version": "1.0.61", "openclaw": {"requires": {"bins": ["openbroker"], "env": ["HYPERLIQUID_PRIVATE_KEY"]}, "primaryEnv": "HYPERLIQUID_PRIVATE_KEY", "install": [{"id": "node", "kind": "node", "package": "openbroker", "bins": ["openbroker"], "label": "Install openbroker (npm)"}]}}
+metadata: {"author": "monemetrics", "version": "1.0.62", "openclaw": {"requires": {"bins": ["openbroker"], "env": ["HYPERLIQUID_PRIVATE_KEY"]}, "primaryEnv": "HYPERLIQUID_PRIVATE_KEY", "install": [{"id": "node", "kind": "node", "package": "openbroker", "bins": ["openbroker"], "label": "Install openbroker (npm)"}]}}
 allowed-tools: ob_account ob_positions ob_funding ob_markets ob_search ob_spot ob_fills ob_orders ob_order_status ob_fees ob_candles ob_funding_history ob_trades ob_rate_limit ob_funding_scan ob_buy ob_sell ob_limit ob_trigger ob_tpsl ob_cancel ob_twap ob_bracket ob_chase ob_watcher_status ob_auto_run ob_auto_stop ob_auto_list Bash(openbroker:*)
 ---
 
@@ -546,6 +546,7 @@ export default function(api) {
 | `api.state.set(key, value)` | Set a persisted value |
 | `api.state.delete(key)` | Delete a persisted value |
 | `api.state.clear()` | Clear all state |
+| `api.publish(message, options?)` | Send a message to the OpenClaw agent via webhook. Triggers an agent turn — the agent receives the message and can notify the user, take action, etc. Returns `true` if delivered. Options: `{ name?, wakeMode?, deliver?, channel? }` |
 | `api.log.info/warn/error/debug(msg)` | Structured logger |
 | `api.utils` | `roundPrice`, `roundSize`, `sleep`, `normalizeCoin`, `formatUsd`, `annualizeFundingRate` |
 | `api.id` | Automation ID (filename or `--id` flag) |
@@ -652,6 +653,47 @@ export default function(api) {
 }
 ```
 
+### Publishing to the Agent (Webhooks)
+
+Use `api.publish()` to send messages back to the OpenClaw agent. This triggers an agent turn — the agent receives the message and can notify the user via their preferred channel, take trading actions, or log the event.
+
+```typescript
+// Simple notification
+await api.publish(`ETH broke above $4000 — current price: $${price}`);
+
+// With options
+await api.publish(`Margin at ${pct}% — positions at risk`, {
+  name: 'margin-alert',           // appears in logs
+  wakeMode: 'now',                // 'now' (default) or 'next-heartbeat'
+  channel: 'slack',               // target channel (optional)
+});
+```
+
+`api.publish()` returns `true` if delivered, `false` if webhooks are not configured (no hooks token). It requires `OPENCLAW_HOOKS_TOKEN` to be set (automatically configured when running as an OpenClaw plugin).
+
+**Example: Price alert automation with publish**
+```typescript
+// ~/.openbroker/automations/price-alert.ts
+export default function(api) {
+  const COIN = 'ETH';
+  const THRESHOLD = 4000;
+
+  api.on('price_change', async ({ coin, newPrice, changePct }) => {
+    if (coin !== COIN) return;
+
+    const crossed = api.state.get<boolean>('crossed', false);
+    if (!crossed && newPrice >= THRESHOLD) {
+      api.state.set('crossed', true);
+      await api.publish(
+        `${COIN} crossed above $${THRESHOLD}! Price: $${newPrice.toFixed(2)} (+${changePct.toFixed(2)}%)`,
+      );
+    } else if (crossed && newPrice < THRESHOLD) {
+      api.state.set('crossed', false);
+    }
+  });
+}
+```
+
 ### Running Automations
 
 **CLI:**
@@ -680,9 +722,11 @@ openbroker auto status                      # Show running automations
 - Always test with `--dry` first before live trading
 - Use `api.state` to track position state across restarts
 - Use `api.onStop()` to clean up — close positions, cancel orders
+- Use `api.publish()` to send alerts/events back to the OpenClaw agent — do NOT manually construct webhook requests
 - The runtime catches errors per handler — one failing handler won't crash others
 - Scripts are loaded from `~/.openbroker/automations/` by name, or from any absolute path
 - All trading commands support HIP-3 assets (`api.client.marketOrder('xyz:CL', true, 1)`)
+- Automations persist across gateway restarts — they are automatically restarted when the gateway comes back up
 
 ## Risk Warning
 

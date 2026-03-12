@@ -18,7 +18,18 @@ function error(message: string) {
   return json({ error: message });
 }
 
-export function createTools(watcher: PositionWatcher | null): PluginTool[] {
+export interface ToolsContext {
+  watcher: PositionWatcher | null;
+  gatewayPort?: number;
+  hooksToken?: string;
+}
+
+export function createTools(watcherOrCtx: PositionWatcher | null | ToolsContext): PluginTool[] {
+  // Support both old signature (watcher only) and new (full context)
+  const ctx: ToolsContext = watcherOrCtx !== null && typeof watcherOrCtx === 'object' && 'watcher' in watcherOrCtx
+    ? watcherOrCtx
+    : { watcher: watcherOrCtx };
+  const { watcher, gatewayPort, hooksToken } = ctx;
   return [
     // ── Info Tools ──────────────────────────────────────────────
 
@@ -1326,6 +1337,8 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
             id: params.id ? String(params.id) : undefined,
             dryRun: params.dry === true,
             pollIntervalMs: params.poll ? Number(params.poll) : 10_000,
+            gatewayPort,
+            hooksToken,
           });
 
           return json({
@@ -1367,23 +1380,41 @@ export function createTools(watcher: PositionWatcher | null): PluginTool[] {
 
     {
       name: 'ob_auto_list',
-      description: 'List available automation scripts and running automations',
+      description: 'List available automation scripts and running automations (including those started from other processes)',
       parameters: { type: 'object', properties: {} },
       async execute() {
         const { listAutomations } = await import('../auto/loader.js');
-        const { getRunningAutomations } = await import('../auto/runtime.js');
+        const { getRunningAutomations, getRegisteredAutomations } = await import('../auto/runtime.js');
 
         const available = listAutomations();
-        const running = getRunningAutomations().map(a => ({
+
+        // In-process automations with live stats
+        const inProcess = getRunningAutomations().map(a => ({
           id: a.id,
           scriptPath: a.scriptPath,
           uptime: Math.round((Date.now() - a.startedAt.getTime()) / 1000),
           pollCount: a.pollCount,
           eventsEmitted: a.eventsEmitted,
           dryRun: a.dryRun,
+          source: 'this_process',
         }));
 
-        return json({ available, running });
+        // File-registry entries from other processes
+        const registered = getRegisteredAutomations();
+        const external = registered
+          .filter(r => !inProcess.some(ip => ip.id === r.id))
+          .map(r => ({
+            id: r.id,
+            scriptPath: r.scriptPath,
+            status: r.status,
+            pid: r.pid,
+            startedAt: r.startedAt,
+            dryRun: r.dryRun,
+            error: r.error,
+            source: 'other_process',
+          }));
+
+        return json({ available, running: [...inProcess, ...external] });
       },
     },
   ];

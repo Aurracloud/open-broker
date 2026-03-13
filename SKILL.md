@@ -1,11 +1,11 @@
 ---
 name: openbroker
-description: Hyperliquid trading plugin with background position monitoring. Execute market orders, limit orders, manage positions, view funding rates, and run trading strategies with automatic alerts for PnL changes and liquidation risk.
+description: Hyperliquid trading plugin with background position monitoring and custom automations. Execute market orders, limit orders, manage positions, view funding rates, run trading strategies, and write event-driven automation scripts with automatic alerts for PnL changes and liquidation risk.
 license: MIT
 compatibility: Requires Node.js 22+, network access to api.hyperliquid.xyz
 homepage: https://www.npmjs.com/package/openbroker
-metadata: {"author": "monemetrics", "version": "1.0.60", "openclaw": {"requires": {"bins": ["openbroker"], "env": ["HYPERLIQUID_PRIVATE_KEY"]}, "primaryEnv": "HYPERLIQUID_PRIVATE_KEY", "install": [{"id": "node", "kind": "node", "package": "openbroker", "bins": ["openbroker"], "label": "Install openbroker (npm)"}]}}
-allowed-tools: ob_account ob_positions ob_funding ob_markets ob_search ob_spot ob_fills ob_orders ob_order_status ob_fees ob_candles ob_funding_history ob_trades ob_rate_limit ob_funding_scan ob_buy ob_sell ob_limit ob_trigger ob_tpsl ob_cancel ob_twap ob_bracket ob_chase ob_watcher_status Bash(openbroker:*)
+metadata: {"author": "monemetrics", "version": "1.0.64", "openclaw": {"requires": {"bins": ["openbroker"], "env": ["HYPERLIQUID_PRIVATE_KEY"]}, "primaryEnv": "HYPERLIQUID_PRIVATE_KEY", "install": [{"id": "node", "kind": "node", "package": "openbroker", "bins": ["openbroker"], "label": "Install openbroker (npm)"}]}}
+allowed-tools: ob_account ob_positions ob_funding ob_markets ob_search ob_spot ob_fills ob_orders ob_order_status ob_fees ob_candles ob_funding_history ob_trades ob_rate_limit ob_funding_scan ob_buy ob_sell ob_limit ob_trigger ob_tpsl ob_cancel ob_twap ob_bracket ob_chase ob_watcher_status ob_auto_run ob_auto_stop ob_auto_list Bash(openbroker:*)
 ---
 
 # Open Broker - Hyperliquid Trading CLI
@@ -66,6 +66,9 @@ If an `ob_*` plugin tool returns unexpected errors, empty results, or crashes, *
 | `ob_orders` | `openbroker orders --json` |
 | `ob_funding_scan` | `openbroker funding-scan --json` |
 | `ob_candles` | `openbroker candles --coin <COIN> --json` |
+| `ob_auto_run` | `openbroker auto run <script> [--dry]` |
+| `ob_auto_stop` | (stop via SIGINT when using CLI) |
+| `ob_auto_list` | `openbroker auto list` |
 
 **When to use CLI fallback:**
 - Plugin tool returns `null`, empty data, or throws an error
@@ -448,6 +451,7 @@ This skill works standalone via Bash — every command above runs through the `o
 
 - **Structured agent tools** (`ob_account`, `ob_buy`, `ob_limit`, etc.) — typed tool calls with proper input schemas instead of Bash strings. The agent gets structured JSON responses.
 - **Background position watcher** — polls your Hyperliquid account every 30s and sends webhook alerts when positions open/close, PnL moves significantly, or margin usage gets dangerous.
+- **Automation tools** (`ob_auto_run`, `ob_auto_stop`, `ob_auto_list`) — start, stop, and manage custom trading automations from within the agent.
 - **CLI commands** — `openclaw ob status` and `openclaw ob watch` for inspecting the watcher.
 
 ### Enable the plugin
@@ -486,6 +490,437 @@ Without hooks, the watcher still runs and tracks state (accessible via `ob_watch
 
 - **Skill only (no plugin):** Use Bash commands (`openbroker buy --coin ETH --size 0.1`). No background monitoring.
 - **Skill + plugin:** The agent prefers the `ob_*` tools when available (structured data), falls back to Bash for commands not covered by tools (strategies, scale). Background watcher sends alerts automatically.
+
+## Trading Automations
+
+Automations let you write custom event-driven trading logic as TypeScript scripts. Instead of using the rigid built-in strategies, write exactly the logic you need and OpenBroker handles the polling, event detection, and SDK access.
+
+### How Automations Work
+
+An automation is a `.ts` file that exports a default function. The function receives an `AutomationAPI` with the full Hyperliquid client, typed event subscriptions, persistent state, and a logger. The runtime polls Hyperliquid every 10s (configurable) and dispatches events when changes are detected.
+
+### Writing an Automation
+
+Create a `.ts` file in `~/.openbroker/automations/` (or any path):
+
+```typescript
+// ~/.openbroker/automations/funding-scalp.ts
+export default function(api) {
+  const COIN = 'ETH';
+
+  api.on('funding_update', async ({ coin, annualized }) => {
+    if (coin !== COIN) return;
+
+    if (annualized > 0.5 && !api.state.get('isShort')) {
+      api.log.info('High positive funding — going short');
+      await api.client.marketOrder(COIN, false, 0.1);
+      api.state.set('isShort', true);
+    } else if (annualized < -0.1 && api.state.get('isShort')) {
+      api.log.info('Funding normalized — closing short');
+      await api.client.marketOrder(COIN, true, 0.1);
+      api.state.set('isShort', false);
+    }
+  });
+
+  api.onStop(async () => {
+    if (api.state.get('isShort')) {
+      api.log.warn('Closing short on shutdown');
+      await api.client.marketOrder('ETH', true, 0.1);
+      api.state.set('isShort', false);
+    }
+  });
+}
+```
+
+### AutomationAPI Reference
+
+| Property / Method | Description |
+|-------------------|-------------|
+| `api.client` | Full HyperliquidClient — `marketOrder()`, `limitOrder()`, `triggerOrder()`, `cancelAll()`, `getUserStateAll()`, `getAllMids()`, `updateLeverage()`, and 35+ more methods |
+| `api.on(event, handler)` | Subscribe to a market/account event (see Events below) |
+| `api.every(ms, handler)` | Run a handler on a recurring interval (aligned to poll loop) |
+| `api.onStart(handler)` | Called after all handlers are registered, before first poll |
+| `api.onStop(handler)` | Called on shutdown (SIGINT). Use for cleanup — close positions, cancel orders |
+| `api.onError(handler)` | Called when a handler throws. Error is already logged — use for recovery logic |
+| `api.state.get(key)` | Get a persisted value (survives restarts, stored in `~/.openbroker/state/`) |
+| `api.state.set(key, value)` | Set a persisted value |
+| `api.state.delete(key)` | Delete a persisted value |
+| `api.state.clear()` | Clear all state |
+| `api.publish(message, options?)` | Send a message to the OpenClaw agent via webhook. Triggers an agent turn — the agent receives the message and can notify the user, take action, etc. Returns `true` if delivered. Options: `{ name?, wakeMode?, deliver?, channel? }` |
+| `api.log.info/warn/error/debug(msg)` | Structured logger |
+| `api.utils` | `roundPrice`, `roundSize`, `sleep`, `normalizeCoin`, `formatUsd`, `annualizeFundingRate` |
+| `api.id` | Automation ID (filename or `--id` flag) |
+| `api.dryRun` | `true` if running with `--dry` (write methods are intercepted) |
+
+### Events
+
+| Event | Payload | When |
+|-------|---------|------|
+| `tick` | `{ timestamp, pollCount }` | Every poll cycle (default: 10s) |
+| `price_change` | `{ coin, oldPrice, newPrice, changePct }` | Mid price moved > 0.01% between polls |
+| `funding_update` | `{ coin, fundingRate, annualized, premium }` | Every poll for all assets |
+| `position_opened` | `{ coin, side, size, entryPrice }` | New position detected |
+| `position_closed` | `{ coin, previousSize, entryPrice }` | Position no longer present |
+| `position_changed` | `{ coin, oldSize, newSize, entryPrice }` | Position size changed |
+| `pnl_threshold` | `{ coin, unrealizedPnl, changePct, positionValue }` | PnL moved > 5% of position value |
+| `margin_warning` | `{ marginUsedPct, equity, marginUsed }` | Margin usage > 80% |
+
+### Event Details — Choosing the Right Event
+
+#### `tick` — The universal heartbeat
+Fires **every single poll cycle** (default: 10s) regardless of market conditions. Use this when you need to check something on every poll — absolute price thresholds, custom conditions, periodic account checks. This is the most reliable event because it always fires.
+
+**Payload:** `{ timestamp: number, pollCount: number }`
+
+**When to use:**
+- Checking if a price is above/below an absolute threshold (e.g. "alert me when ETH < $3000")
+- Custom conditions that don't fit other events (e.g. "if I have no positions and funding is high, enter")
+- Periodic tasks that need to run every poll (though `api.every()` is better for longer intervals)
+
+**Example — absolute price alert:**
+```typescript
+api.on('tick', async () => {
+  const mids = await api.client.getAllMids();
+  const price = parseFloat(mids['HYPE']);
+  if (price < 38 && !api.state.get('alerted')) {
+    api.state.set('alerted', true);
+    await api.publish(`HYPE dropped below $38 — now at $${price.toFixed(3)}`);
+  }
+});
+```
+
+**Note:** `tick` does not include price data in its payload — you must fetch it yourself via `api.client.getAllMids()`. This is because tick fires before any other event processing. If you only care about price movements, use `price_change` instead.
+
+#### `price_change` — Relative price movements
+Fires when a coin's mid price moves **≥ 0.01%** compared to the previous poll. This filters out rounding noise while catching virtually any real price movement. The comparison is between consecutive polls (not from a fixed baseline), so it detects incremental changes.
+
+**Payload:** `{ coin: string, oldPrice: number, newPrice: number, changePct: number }`
+
+**When to use:**
+- Reacting to price movements (breakouts, momentum, mean reversion)
+- Monitoring specific coins for volatility
+- Building price-triggered entry/exit logic
+
+**When NOT to use:**
+- Checking if price is above/below a fixed threshold — use `tick` instead, because `price_change` only fires on relative movement between polls. During slow drifts (e.g. price slowly declining $0.001/s), the change between any two 10s polls may be < 0.01%, so the event won't fire even though the price has crossed your threshold.
+
+**Example — momentum detector:**
+```typescript
+api.on('price_change', async ({ coin, changePct, newPrice }) => {
+  if (coin !== 'ETH') return;
+  if (changePct > 0.5) {
+    api.log.info(`ETH surging +${changePct.toFixed(2)}% — price $${newPrice}`);
+    // Enter long on strong upward momentum
+  }
+});
+```
+
+#### `funding_update` — Funding rate data
+Fires **every poll** for **every asset** that has funding rate data. This is high-frequency — if there are 150 perp assets, this fires 150 times per poll. Filter by coin in your handler.
+
+**Payload:** `{ coin: string, fundingRate: number, annualized: number, premium: number }`
+- `fundingRate` — the raw hourly funding rate (e.g. 0.0001 = 0.01%/hr)
+- `annualized` — annualized rate (fundingRate × 8760 × 100, as a percentage)
+- `premium` — the premium component
+
+**When to use:**
+- Funding rate arbitrage strategies
+- Monitoring for extreme funding (entry/exit signals)
+- Scanning for highest/lowest funding across all assets
+
+**Example — funding scalp:**
+```typescript
+api.on('funding_update', async ({ coin, annualized }) => {
+  if (coin !== 'ETH') return;
+  if (annualized > 50 && !api.state.get('isShort')) {
+    api.log.info(`ETH funding at ${annualized.toFixed(1)}% annualized — shorting`);
+    await api.client.marketOrder('ETH', false, 0.1);
+    api.state.set('isShort', true);
+  }
+});
+```
+
+#### `position_opened` — New position detected
+Fires when a position appears that wasn't present in the previous poll. Useful for tracking entries made by other systems or confirming your own orders filled.
+
+**Payload:** `{ coin: string, side: 'long' | 'short', size: number, entryPrice: number }`
+
+**When to use:**
+- Setting TP/SL on new positions automatically
+- Logging/alerting when positions are opened (by you or another system)
+- Starting position-specific monitoring
+
+**Example — auto TP/SL on new positions:**
+```typescript
+api.on('position_opened', async ({ coin, side, size, entryPrice }) => {
+  const tpPrice = side === 'long' ? entryPrice * 1.05 : entryPrice * 0.95;
+  const slPrice = side === 'long' ? entryPrice * 0.97 : entryPrice * 1.03;
+  await api.client.takeProfit(coin, side !== 'long', size, tpPrice);
+  await api.client.stopLoss(coin, side !== 'long', size, slPrice);
+  api.log.info(`Set TP at ${tpPrice} / SL at ${slPrice} for ${coin}`);
+});
+```
+
+#### `position_closed` — Position gone
+Fires when a position that existed in the previous poll is no longer present. The position was either closed by you, liquidated, or filled by TP/SL.
+
+**Payload:** `{ coin: string, previousSize: number, entryPrice: number }`
+
+**When to use:**
+- Logging/alerting when positions close
+- Cleaning up related orders or state
+- Re-entry logic after a position closes
+
+**Example:**
+```typescript
+api.on('position_closed', async ({ coin, previousSize, entryPrice }) => {
+  api.log.info(`${coin} position closed (was ${previousSize} @ ${entryPrice})`);
+  api.state.delete(`${coin}_tp`);
+  await api.publish(`Position closed: ${coin} (entry: $${entryPrice})`);
+});
+```
+
+#### `position_changed` — Size or direction changed
+Fires when an existing position's size changes (partial close, add to position, or flip direction). Does NOT fire when a new position opens or an existing one fully closes — use `position_opened` and `position_closed` for those.
+
+**Payload:** `{ coin: string, oldSize: number, newSize: number, entryPrice: number }`
+- `oldSize`/`newSize` are signed: positive = long, negative = short
+
+**When to use:**
+- Detecting partial closes or position scaling
+- Adjusting TP/SL when position size changes
+- Tracking DCA entries
+
+**Example:**
+```typescript
+api.on('position_changed', async ({ coin, oldSize, newSize }) => {
+  if (Math.abs(newSize) > Math.abs(oldSize)) {
+    api.log.info(`${coin} position increased: ${oldSize} → ${newSize}`);
+  } else {
+    api.log.info(`${coin} position reduced: ${oldSize} → ${newSize}`);
+  }
+});
+```
+
+#### `pnl_threshold` — Significant PnL movement
+Fires when unrealized PnL changes by **≥ 5% of position value** between consecutive polls. This is a large move detector — useful for risk management alerts rather than routine monitoring.
+
+**Payload:** `{ coin: string, unrealizedPnl: number, changePct: number, positionValue: number }`
+- `changePct` — the PnL change as a percentage of total position value (not % of PnL itself)
+
+**When to use:**
+- Risk alerts for large PnL swings
+- Auto-close or reduce positions on sudden adverse moves
+- Escalating alerts to the user via `api.publish()`
+
+**Example:**
+```typescript
+api.on('pnl_threshold', async ({ coin, unrealizedPnl, changePct }) => {
+  if (unrealizedPnl < 0) {
+    await api.publish(
+      `⚠️ ${coin} PnL dropped sharply: $${unrealizedPnl.toFixed(2)} (${changePct.toFixed(1)}% of position)`,
+      { name: 'pnl-alert' },
+    );
+  }
+});
+```
+
+#### `margin_warning` — High margin usage
+Fires when margin usage exceeds **80%** of equity. After the first trigger, it only fires again if margin usage increases by another 5 percentage points (prevents spam). Resets when margin drops back below 80%.
+
+**Payload:** `{ marginUsedPct: number, equity: number, marginUsed: number }`
+
+**When to use:**
+- Automated risk reduction (close smallest position to free margin)
+- Alerting the user before liquidation risk
+- Pausing new entries when margin is high
+
+**Example:**
+```typescript
+api.on('margin_warning', async ({ marginUsedPct, equity }) => {
+  await api.publish(
+    `🚨 Margin at ${marginUsedPct.toFixed(1)}% — equity: $${equity.toFixed(2)}. Consider reducing exposure.`,
+    { name: 'margin-alert' },
+  );
+});
+```
+
+### Choosing the Right Event — Quick Guide
+
+| Use case | Best event | Why |
+|----------|-----------|-----|
+| Alert when price crosses a fixed level | `tick` | Fires every poll — no minimum change threshold |
+| React to price momentum/volatility | `price_change` | Provides relative change data between polls |
+| Funding rate strategy | `funding_update` | Gives annualized rate directly |
+| Auto TP/SL on new positions | `position_opened` | Fires exactly when a new position appears |
+| Log when positions close | `position_closed` | Fires when position disappears |
+| Track position scaling | `position_changed` | Fires on size changes only |
+| Risk management — PnL spikes | `pnl_threshold` | Only fires on large moves (≥5% of position value) |
+| Risk management — margin | `margin_warning` | Fires at 80%+ margin usage |
+| Periodic task (DCA, rebalance) | `api.every(ms, fn)` | Better than tick for longer intervals |
+
+### Client Methods Available
+
+The `api.client` object exposes the full Hyperliquid SDK:
+
+**Trading:** `marketOrder(coin, isBuy, size)`, `limitOrder(coin, isBuy, size, price)`, `triggerOrder(coin, isBuy, size, triggerPx, isMarket)`, `takeProfit(coin, isBuy, size, triggerPx)`, `stopLoss(coin, isBuy, size, triggerPx)`, `cancel(coin, oid)`, `cancelAll(coin?)`
+
+**Market Data:** `getAllMids()`, `getMetaAndAssetCtxs()`, `getRecentTrades(coin)`, `getCandleSnapshot(coin, interval)`, `getFundingHistory(coin)`, `getPredictedFundings()`
+
+**Account:** `getUserStateAll()`, `getOpenOrders()`, `getUserFills()`, `getUserFunding()`, `getHistoricalOrders()`, `getUserFees()`, `getUserRateLimit()`, `getSpotBalances()`
+
+**Leverage:** `updateLeverage(coin, leverage, isIsolated?)`
+
+### Example: Price Breakout
+
+```typescript
+// ~/.openbroker/automations/breakout.ts
+export default function(api) {
+  const COIN = 'ETH';
+  const BREAKOUT_PCT = 2;  // 2% move triggers entry
+  const SIZE = 0.5;
+  let basePrice = null;
+
+  api.onStart(async () => {
+    const mids = await api.client.getAllMids();
+    basePrice = parseFloat(mids[COIN]);
+    api.log.info(`Watching ${COIN} from $${basePrice} for ${BREAKOUT_PCT}% breakout`);
+  });
+
+  api.on('price_change', async ({ coin, newPrice }) => {
+    if (coin !== COIN || !basePrice) return;
+    const totalChange = ((newPrice - basePrice) / basePrice) * 100;
+
+    if (Math.abs(totalChange) >= BREAKOUT_PCT && !api.state.get('inPosition')) {
+      const side = totalChange > 0;  // true = long, false = short
+      api.log.info(`Breakout! ${totalChange.toFixed(2)}% — entering ${side ? 'long' : 'short'}`);
+      await api.client.marketOrder(COIN, side, SIZE);
+      api.state.set('inPosition', true);
+    }
+  });
+}
+```
+
+### Example: Scheduled DCA
+
+```typescript
+// ~/.openbroker/automations/hourly-dca.ts
+export default function(api) {
+  const COIN = 'ETH';
+  const USD_PER_BUY = 100;
+
+  // Buy $100 of ETH every hour
+  api.every(60 * 60 * 1000, async () => {
+    const mids = await api.client.getAllMids();
+    const price = parseFloat(mids[COIN]);
+    const size = parseFloat(api.utils.roundSize(USD_PER_BUY / price, 4));
+    await api.client.marketOrder(COIN, true, size);
+    const count = (api.state.get('buyCount') || 0) + 1;
+    api.state.set('buyCount', count);
+    api.log.info(`DCA #${count}: bought ${size} ${COIN} at $${price}`);
+  });
+}
+```
+
+### Example: Margin Guardian
+
+```typescript
+// ~/.openbroker/automations/margin-guard.ts
+export default function(api) {
+  api.on('margin_warning', async ({ marginUsedPct, equity }) => {
+    api.log.warn(`Margin at ${marginUsedPct.toFixed(1)}% — reducing positions`);
+
+    // Close the smallest position to free margin
+    const state = await api.client.getUserStateAll();
+    const positions = state.assetPositions
+      .filter(p => parseFloat(p.position.szi) !== 0)
+      .sort((a, b) => Math.abs(parseFloat(a.position.positionValue)) - Math.abs(parseFloat(b.position.positionValue)));
+
+    if (positions.length > 0) {
+      const pos = positions[0].position;
+      const size = Math.abs(parseFloat(pos.szi));
+      const isBuy = parseFloat(pos.szi) < 0; // Close short = buy, close long = sell
+      api.log.info(`Closing smallest position: ${pos.coin} (${pos.szi})`);
+      await api.client.marketOrder(pos.coin, isBuy, size);
+    }
+  });
+}
+```
+
+### Publishing to the Agent (Webhooks)
+
+Use `api.publish()` to send messages back to the OpenClaw agent. This triggers an agent turn — the agent receives the message and can notify the user via their preferred channel, take trading actions, or log the event.
+
+```typescript
+// Simple notification
+await api.publish(`ETH broke above $4000 — current price: $${price}`);
+
+// With options
+await api.publish(`Margin at ${pct}% — positions at risk`, {
+  name: 'margin-alert',           // appears in logs
+  wakeMode: 'now',                // 'now' (default) or 'next-heartbeat'
+  channel: 'slack',               // target channel (optional)
+});
+```
+
+`api.publish()` returns `true` if delivered, `false` if webhooks are not configured (no hooks token). It requires `OPENCLAW_HOOKS_TOKEN` to be set (automatically configured when running as an OpenClaw plugin).
+
+**Example: Price alert automation with publish**
+```typescript
+// ~/.openbroker/automations/price-alert.ts
+export default function(api) {
+  const COIN = 'ETH';
+  const THRESHOLD = 4000;
+
+  api.on('price_change', async ({ coin, newPrice, changePct }) => {
+    if (coin !== COIN) return;
+
+    const crossed = api.state.get<boolean>('crossed', false);
+    if (!crossed && newPrice >= THRESHOLD) {
+      api.state.set('crossed', true);
+      await api.publish(
+        `${COIN} crossed above $${THRESHOLD}! Price: $${newPrice.toFixed(2)} (+${changePct.toFixed(2)}%)`,
+      );
+    } else if (crossed && newPrice < THRESHOLD) {
+      api.state.set('crossed', false);
+    }
+  });
+}
+```
+
+### Running Automations
+
+**CLI:**
+```bash
+openbroker auto run my-strategy --dry       # Test without trading
+openbroker auto run ./funding-scalp.ts      # Run from path
+openbroker auto run my-strategy --poll 5000 # Poll every 5s
+openbroker auto list                        # Show available scripts
+openbroker auto status                      # Show running automations
+```
+
+**Plugin tools (for OpenClaw agents):**
+- `ob_auto_run` — `{ "script": "funding-scalp", "dry": true }` — start an automation
+- `ob_auto_stop` — `{ "id": "funding-scalp" }` — stop a running automation
+- `ob_auto_list` — `{}` — list available and running automations
+
+**Options:**
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--dry` | Intercept write methods — no real trades | false |
+| `--verbose` | Show debug output | false |
+| `--id <name>` | Custom automation ID | filename |
+| `--poll <ms>` | Poll interval in milliseconds | 10000 |
+
+**Important notes for agents writing automations:**
+- Always test with `--dry` first before live trading
+- Use `api.state` to track position state across restarts
+- Use `api.onStop()` to clean up — close positions, cancel orders
+- Use `api.publish()` to send alerts/events back to the OpenClaw agent — do NOT manually construct webhook requests
+- The runtime catches errors per handler — one failing handler won't crash others
+- Scripts are loaded from `~/.openbroker/automations/` by name, or from any absolute path
+- All trading commands support HIP-3 assets (`api.client.marketOrder('xyz:CL', true, 1)`)
+- Automations persist across gateway restarts — they are automatically restarted when the gateway comes back up
 
 ## Risk Warning
 

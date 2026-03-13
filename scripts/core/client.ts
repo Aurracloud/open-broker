@@ -1566,6 +1566,19 @@ export class HyperliquidClient {
     this.requireTrading();
     await this.getMetaAndAssetCtxs();
 
+    // HIP-3 perps only support isolated margin — override isCross and clamp leverage
+    if (this.isHip3(coin)) {
+      if (isCross) {
+        this.log(`HIP-3 asset ${coin} does not support cross margin — forcing isolated`);
+      }
+      isCross = false;
+      const maxLev = this.hip3MaxLeverageMap.get(coin) ?? 10;
+      if (leverage > maxLev) {
+        this.log(`HIP-3 asset ${coin} max leverage is ${maxLev}x — clamping from ${leverage}x`);
+        leverage = maxLev;
+      }
+    }
+
     const assetIndex = this.getAssetIndex(coin);
 
     this.log(`Updating leverage: ${coin} (asset ${assetIndex}) to ${leverage}x ${isCross ? 'cross' : 'isolated'}`);

@@ -1,7 +1,7 @@
 {
   "id": "openbroker",
   "name": "OpenBroker — Hyperliquid Trading",
-  "version": "1.0.64",
+  "version": "1.0.65",
   "description": "Trade on Hyperliquid DEX with background position monitoring",
   "configSchema": {
     "type": "object",

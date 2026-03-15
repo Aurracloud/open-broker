@@ -1221,8 +1221,28 @@ export class HyperliquidClient {
 
   async getOpenOrders(user?: string): Promise<OpenOrder[]> {
     this.log('Fetching openOrders for:', user ?? this.address);
-    const response = await this.info.openOrders({ user: user ?? this.address });
-    return response as OpenOrder[];
+    await this.getMetaAndAssetCtxs(); // Ensure HIP-3 dex list is loaded
+
+    // Fetch main dex orders
+    const orders = await this.info.openOrders({ user: user ?? this.address }) as OpenOrder[];
+
+    // Fetch HIP-3 dex orders
+    const dexs = await this.getPerpDexs();
+    for (let i = 1; i < dexs.length; i++) {
+      const dex = dexs[i];
+      if (!dex) continue;
+      try {
+        const dexOrders = await this.info.openOrders({ user: user ?? this.address, dex: dex.name }) as OpenOrder[];
+        if (dexOrders.length > 0) {
+          this.log(`Found ${dexOrders.length} open orders on HIP-3 dex ${dex.name}`);
+          orders.push(...dexOrders);
+        }
+      } catch (err) {
+        this.log(`Failed to fetch open orders for dex ${dex.name}:`, err instanceof Error ? err.message : String(err));
+      }
+    }
+
+    return orders;
   }
 
   // ============ Trading ============

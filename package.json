@@ -62,11 +62,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/aurracloud/openbroker.git"
+    "url": "git+https://github.com/aurracloud/open-broker.git"
   },
-  "homepage": "https://github.com/aurracloud/openbroker#readme",
+  "homepage": "https://github.com/aurracloud/open-broker#readme",
   "bugs": {
-    "url": "https://github.com/aurracloud/openbroker/issues"
+    "url": "https://github.com/aurracloud/open-broker/issues"
   },
   "author": "aurracloud",
   "keywords": [

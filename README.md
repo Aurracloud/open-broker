@@ -172,10 +172,12 @@ openbroker fills --coin BTC --side buy --top 50
 
 #### `orders` — Order History
 
-View all historical orders including filled, canceled, and rejected.
+View all historical orders including filled, canceled, and rejected. Use `--open` to show only currently open orders.
 
 ```bash
 openbroker orders                         # Recent orders
+openbroker orders --open                  # Currently open orders only
+openbroker orders --open --coin ETH       # Open orders for a specific coin
 openbroker orders --coin ETH --status filled
 openbroker orders --top 50
 ```
@@ -184,6 +186,7 @@ openbroker orders --top 50
 |------|-------------|---------|
 | `--coin` | Filter by coin symbol | — |
 | `--status` | Filter by status (filled, canceled, open, triggered, etc.) | — |
+| `--open` | Show only currently open orders | — |
 | `--top` | Number of recent orders to show | `20` |
 
 #### `order-status` — Check Order Status

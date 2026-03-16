@@ -491,18 +491,48 @@ export function createTools(watcherOrCtx: PositionWatcher | null | ToolsContext)
 
     {
       name: 'ob_orders',
-      description: 'View order history with status (filled, canceled, open, etc.)',
+      description: 'View order history with status (filled, canceled, open, etc.). Use open_only to get currently open orders.',
       parameters: {
         type: 'object',
         properties: {
           coin: { type: 'string', description: 'Filter by coin symbol' },
           status: { type: 'string', description: 'Filter by status (filled, canceled, open, etc.)' },
+          open_only: { type: 'boolean', description: 'If true, return only currently open orders (uses dedicated endpoint)' },
           top: { type: 'number', description: 'Number of recent orders (default: 20)' },
         },
       },
       async execute(_id, params) {
         const { getClient } = await import('../core/client.js');
         const client = getClient();
+        const top = (params.top as number) || 20;
+
+        if (params.open_only) {
+          let openOrders = await client.getOpenOrders();
+
+          if (params.coin) {
+            const coin = normalizeCoin(params.coin as string);
+            openOrders = openOrders.filter(o => o.coin === coin);
+          }
+
+          openOrders.sort((a, b) => b.timestamp - a.timestamp);
+          openOrders = openOrders.slice(0, top);
+
+          return json({
+            address: client.address,
+            orders: openOrders.map(o => ({
+              coin: o.coin,
+              side: o.side === 'B' ? 'buy' : 'sell',
+              size: o.sz,
+              origSize: o.origSz,
+              price: o.limitPx,
+              orderType: o.orderType,
+              oid: o.oid,
+              status: 'open',
+              timestamp: o.timestamp,
+            })),
+          });
+        }
+
         let orders = await client.getHistoricalOrders();
 
         if (params.coin) {
@@ -515,7 +545,6 @@ export function createTools(watcherOrCtx: PositionWatcher | null | ToolsContext)
         }
 
         orders.sort((a, b) => b.order.timestamp - a.order.timestamp);
-        const top = (params.top as number) || 20;
         orders = orders.slice(0, top);
 
         return json({

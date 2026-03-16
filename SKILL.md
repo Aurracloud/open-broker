@@ -4,7 +4,7 @@ description: Hyperliquid trading plugin with background position monitoring and 
 license: MIT
 compatibility: Requires Node.js 22+, network access to api.hyperliquid.xyz
 homepage: https://www.npmjs.com/package/openbroker
-metadata: {"author": "monemetrics", "version": "1.0.66", "openclaw": {"requires": {"bins": ["openbroker"], "env": ["HYPERLIQUID_PRIVATE_KEY"]}, "primaryEnv": "HYPERLIQUID_PRIVATE_KEY", "install": [{"id": "node", "kind": "node", "package": "openbroker", "bins": ["openbroker"], "label": "Install openbroker (npm)"}]}}
+metadata: {"author": "monemetrics", "version": "1.0.67", "openclaw": {"requires": {"bins": ["openbroker"], "env": ["HYPERLIQUID_PRIVATE_KEY"]}, "primaryEnv": "HYPERLIQUID_PRIVATE_KEY", "install": [{"id": "node", "kind": "node", "package": "openbroker", "bins": ["openbroker"], "label": "Install openbroker (npm)"}]}}
 allowed-tools: ob_account ob_positions ob_funding ob_markets ob_search ob_spot ob_fills ob_orders ob_order_status ob_fees ob_candles ob_funding_history ob_trades ob_rate_limit ob_funding_scan ob_buy ob_sell ob_limit ob_trigger ob_tpsl ob_cancel ob_twap ob_bracket ob_chase ob_watcher_status ob_auto_run ob_auto_stop ob_auto_list Bash(openbroker:*)
 ---
 
@@ -100,7 +100,7 @@ The simplest setup for agents. A fresh wallet is generated, the builder fee is a
 **Flow:**
 1. Run `openbroker setup` and choose option 1 ("Generate a fresh wallet")
 2. The CLI generates a wallet, saves the config, and approves the builder fee automatically
-3. Fund the wallet with USDC on Arbitrum, then deposit at https://app.hyperliquid.xyz/
+3. Fund the wallet by sending USDC from your Hyperliquid account to the agent's wallet address using the **Send** feature on https://app.hyperliquid.xyz/. **Funding should be done on Hyperliquid L1 only.**
 4. Start trading
 
 ### API Wallet Setup (Alternative)
@@ -177,6 +177,8 @@ openbroker fills --coin BTC --side buy --top 50
 ### Order History
 ```bash
 openbroker orders                         # Recent orders (all statuses)
+openbroker orders --open                  # Currently open orders only
+openbroker orders --open --coin ETH       # Open orders for a specific coin
 openbroker orders --coin ETH --status filled
 openbroker orders --top 50
 ```
@@ -912,15 +914,32 @@ openbroker auto status                      # Show running automations
 | `--id <name>` | Custom automation ID | filename |
 | `--poll <ms>` | Poll interval in milliseconds | 10000 |
 
-**Important notes for agents writing automations:**
-- Always test with `--dry` first before live trading
-- Use `api.state` to track position state across restarts
-- Use `api.onStop()` to clean up — close positions, cancel orders
-- Use `api.publish()` to send alerts/events back to the OpenClaw agent — do NOT manually construct webhook requests
-- The runtime catches errors per handler — one failing handler won't crash others
-- Scripts are loaded from `~/.openbroker/automations/` by name, or from any absolute path
-- All trading commands support HIP-3 assets (`api.client.marketOrder('xyz:CL', true, 1)`)
-- Automations persist across gateway restarts — they are automatically restarted when the gateway comes back up
+**Guidelines for agents writing automations:**
+
+**Risk & Safety (mandatory):**
+- Always attach a liquidation monitoring automation to every open position. Subscribe to `margin_warning` and `pnl_threshold` events so the user is never blindsided by liquidation risk. If no margin/liquidation automation is already running, create one before placing trades.
+- Use `api.publish()` to notify the user of important events — position opens/closes, TP/SL triggers, large PnL swings, margin warnings, errors, and any situation that requires human attention. Do NOT silently handle critical events.
+- Always register an `api.onStop()` handler to clean up — cancel open orders and close positions (or at minimum alert the user) on shutdown. Never leave orphaned orders or unmanaged positions.
+- Do NOT use `--dry` unless the user explicitly asks for it. Automations should run live by default.
+- Never place trades without validating that sufficient margin is available. Check account state before sizing orders.
+- Cap position sizes relative to account equity. Do not risk more than a reasonable percentage of equity on a single trade unless the user explicitly specifies the size.
+- Always set TP/SL on new positions — either within the automation or by confirming the user has them set. Unprotected positions are a liability.
+
+**State & Reliability:**
+- Use `api.state` to track position state, entry prices, and flags across restarts. Never rely on in-memory variables alone — automations persist across gateway restarts and are automatically restarted.
+- Use idempotency guards (`api.state.get`/`set`) to prevent duplicate orders. Events can fire multiple times for the same condition across polls — always check state before placing orders.
+- The runtime catches errors per handler — one failing handler won't crash others, but always handle expected errors (e.g. order rejection, insufficient margin) gracefully within handlers.
+
+**Communication:**
+- Use `api.publish()` to send alerts/events back to the OpenClaw agent — do NOT manually construct webhook requests.
+- Publish on: position opened/closed, TP/SL triggered, PnL threshold exceeded, margin warning, automation errors, and any automated trade execution. The user should always know what the automation did and why.
+- Include actionable context in publish messages — coin, price, size, PnL, and what happened — so the user can make informed decisions without checking the terminal.
+
+**General:**
+- Scripts are loaded from `~/.openbroker/automations/` by name, or from any absolute path.
+- All trading commands support HIP-3 assets (`api.client.marketOrder('xyz:CL', true, 1)`).
+- Automations persist across gateway restarts — they are automatically restarted when the gateway comes back up.
+- Prefer `api.every(ms, fn)` over `tick` for periodic tasks with intervals longer than the poll cycle.
 
 ## Risk Warning
 

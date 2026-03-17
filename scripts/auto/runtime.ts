@@ -231,6 +231,8 @@ export interface RuntimeOptions {
   gatewayPort?: number;
   /** Hooks token for webhook auth. Falls back to OPENCLAW_HOOKS_TOKEN */
   hooksToken?: string;
+  /** Pre-seed state before the factory function runs (e.g. from --set key=value) */
+  initialState?: Record<string, unknown>;
 }
 
 /** Registry of all running automations */
@@ -255,6 +257,7 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
     pollIntervalMs = 10_000,
     gatewayPort,
     hooksToken,
+    initialState,
   } = options;
 
   const id = options.id || path.basename(scriptPath, '.ts');
@@ -265,6 +268,16 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
 
   const log = createLogger(id, verbose);
   const state = createState(id);
+
+  // Pre-seed state from --set flags (doesn't overwrite already-persisted keys)
+  if (initialState) {
+    for (const [key, value] of Object.entries(initialState)) {
+      if (state.get(key) === undefined) {
+        state.set(key, value);
+      }
+    }
+  }
+
   const eventBus = new AutomationEventBus();
 
   const rawClient = getClient();

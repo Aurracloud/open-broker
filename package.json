@@ -1,6 +1,6 @@
 {
   "name": "openbroker",
-  "version": "1.0.67",
+  "version": "1.0.68",
   "description": "Hyperliquid trading CLI - execute orders, manage positions, and run trading strategies",
   "type": "module",
   "bin": {
@@ -39,11 +39,6 @@
     "bracket": "tsx scripts/operations/bracket.ts",
     "chase": "tsx scripts/operations/chase.ts",
     "funding-scan": "tsx scripts/info/funding-scan.ts",
-    "funding-arb": "tsx scripts/strategies/funding-arb.ts",
-    "grid": "tsx scripts/strategies/grid.ts",
-    "dca": "tsx scripts/strategies/dca.ts",
-    "mm-spread": "tsx scripts/strategies/mm-spread.ts",
-    "mm-maker": "tsx scripts/strategies/mm-maker.ts",
     "prepublishOnly": "npm run test:cli",
     "test:cli": "node --import tsx bin/cli.ts --help"
   },

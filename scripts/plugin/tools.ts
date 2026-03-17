@@ -1344,23 +1344,34 @@ export function createTools(watcherOrCtx: PositionWatcher | null | ToolsContext)
 
     {
       name: 'ob_auto_run',
-      description: 'Start a trading automation script. Scripts are TypeScript files that export a default factory function with event handlers (price_change, funding_update, position_opened, etc.). Scripts are loaded from ~/.openbroker/automations/ or an absolute path.',
+      description: 'Start a trading automation script. Scripts are TypeScript files that export a default factory function with event handlers (price_change, funding_update, position_opened, etc.). Scripts are loaded from ~/.openbroker/automations/, an absolute path, or bundled examples (dca, grid, funding-arb, mm-spread, mm-maker).',
       parameters: {
         type: 'object',
         properties: {
           script: { type: 'string', description: 'Script name (from ~/.openbroker/automations/) or absolute path' },
+          example: { type: 'string', description: 'Bundled example name: dca, grid, funding-arb, mm-spread, mm-maker' },
+          config: { type: 'object', description: 'Key-value config to pre-seed automation state (e.g. { coin: "BTC", amount: 50 })' },
           id: { type: 'string', description: 'Custom automation ID (default: filename)' },
           dry: { type: 'boolean', description: 'Intercept write methods — no real trades' },
           poll: { type: 'number', description: 'Poll interval in milliseconds (default: 10000)' },
         },
-        required: ['script'],
       },
       async execute(_id, params) {
         try {
-          const { resolveScriptPath } = await import('../auto/loader.js');
+          const { resolveScriptPath, resolveExamplePath } = await import('../auto/loader.js');
           const { startAutomation } = await import('../auto/runtime.js');
 
-          const scriptPath = resolveScriptPath(String(params.script));
+          if (!params.script && !params.example) {
+            return error('Either "script" or "example" parameter is required');
+          }
+
+          const scriptPath = params.example
+            ? resolveExamplePath(String(params.example))
+            : resolveScriptPath(String(params.script));
+          const initialState = params.config && typeof params.config === 'object'
+            ? params.config as Record<string, unknown>
+            : undefined;
+
           const automation = await startAutomation({
             scriptPath,
             id: params.id ? String(params.id) : undefined,
@@ -1368,6 +1379,7 @@ export function createTools(watcherOrCtx: PositionWatcher | null | ToolsContext)
             pollIntervalMs: params.poll ? Number(params.poll) : 10_000,
             gatewayPort,
             hooksToken,
+            initialState,
           });
 
           return json({
@@ -1409,13 +1421,14 @@ export function createTools(watcherOrCtx: PositionWatcher | null | ToolsContext)
 
     {
       name: 'ob_auto_list',
-      description: 'List available automation scripts and running automations (including those started from other processes)',
+      description: 'List available automation scripts, bundled examples (dca, grid, funding-arb, mm-spread, mm-maker), and running automations',
       parameters: { type: 'object', properties: {} },
       async execute() {
-        const { listAutomations } = await import('../auto/loader.js');
+        const { listAutomations, loadExampleConfigs } = await import('../auto/loader.js');
         const { getRunningAutomations, getRegisteredAutomations } = await import('../auto/runtime.js');
 
         const available = listAutomations();
+        const examples = await loadExampleConfigs();
 
         // In-process automations with live stats
         const inProcess = getRunningAutomations().map(a => ({
@@ -1443,7 +1456,7 @@ export function createTools(watcherOrCtx: PositionWatcher | null | ToolsContext)
             source: 'other_process',
           }));
 
-        return json({ available, running: [...inProcess, ...external] });
+        return json({ available, examples, running: [...inProcess, ...external] });
       },
     },
   ];

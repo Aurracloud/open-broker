@@ -8,6 +8,20 @@ import type { HyperliquidClient } from '../core/client.js';
 /** What an automation .ts file exports */
 export type AutomationFactory = (api: AutomationAPI) => void | Promise<void>;
 
+/** Config field descriptor for example automations */
+export interface AutomationConfigField {
+  type: 'string' | 'number' | 'boolean';
+  description: string;
+  default: unknown;
+  required?: boolean;
+}
+
+/** Config metadata exported by example automations as `export const config` */
+export interface AutomationConfig {
+  description: string;
+  fields: Record<string, AutomationConfigField>;
+}
+
 // ── Event system ────────────────────────────────────────────────────
 
 export type AutomationEventType =

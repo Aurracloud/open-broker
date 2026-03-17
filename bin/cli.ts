@@ -46,13 +46,6 @@ const commands: Record<string, { script: string; description: string }> = {
   'bracket': { script: 'operations/bracket.ts', description: 'Bracket order (entry + TP + SL)' },
   'chase': { script: 'operations/chase.ts', description: 'Chase order with ALO' },
 
-  // Strategies
-  'funding-arb': { script: 'strategies/funding-arb.ts', description: 'Funding arbitrage strategy' },
-  'grid': { script: 'strategies/grid.ts', description: 'Grid trading strategy' },
-  'dca': { script: 'strategies/dca.ts', description: 'DCA strategy' },
-  'mm-spread': { script: 'strategies/mm-spread.ts', description: 'Market making (spread)' },
-  'mm-maker': { script: 'strategies/mm-maker.ts', description: 'Market making (ALO)' },
-
   // Automations
   'auto': { script: 'auto/cli.ts', description: 'Run/manage trading automations' },
 };
@@ -99,15 +92,10 @@ Advanced Execution:
   bracket              Entry with TP and SL
   chase                Chase price with ALO orders
 
-Strategies:
-  funding-arb          Funding rate arbitrage
-  grid                 Grid trading
-  dca                  Dollar cost averaging
-  mm-spread            Market making (spread-based)
-  mm-maker             Market making (ALO orders)
-
 Automations:
   auto run <script>    Run a custom trading automation
+  auto run --example <name> [--set key=value]  Run a bundled example
+  auto examples        List bundled examples (dca, grid, funding-arb, mm-spread, mm-maker)
   auto list            List available automations
   auto status          Show running automations
 

@@ -4,7 +4,7 @@ description: Hyperliquid trading plugin with background position monitoring and 
 license: MIT
 compatibility: Requires Node.js 22+, network access to api.hyperliquid.xyz
 homepage: https://www.npmjs.com/package/openbroker
-metadata: {"author": "monemetrics", "version": "1.0.67", "openclaw": {"requires": {"bins": ["openbroker"], "env": ["HYPERLIQUID_PRIVATE_KEY"]}, "primaryEnv": "HYPERLIQUID_PRIVATE_KEY", "install": [{"id": "node", "kind": "node", "package": "openbroker", "bins": ["openbroker"], "label": "Install openbroker (npm)"}]}}
+metadata: {"author": "monemetrics", "version": "1.0.68", "openclaw": {"requires": {"bins": ["openbroker"], "env": ["HYPERLIQUID_PRIVATE_KEY"]}, "primaryEnv": "HYPERLIQUID_PRIVATE_KEY", "install": [{"id": "node", "kind": "node", "package": "openbroker", "bins": ["openbroker"], "label": "Install openbroker (npm)"}]}}
 allowed-tools: ob_account ob_positions ob_funding ob_markets ob_search ob_spot ob_fills ob_orders ob_order_status ob_fees ob_candles ob_funding_history ob_trades ob_rate_limit ob_funding_scan ob_buy ob_sell ob_limit ob_trigger ob_tpsl ob_cancel ob_twap ob_bracket ob_chase ob_watcher_status ob_auto_run ob_auto_stop ob_auto_list Bash(openbroker:*)
 ---
 
@@ -234,7 +234,6 @@ All trading commands support HIP-3 assets using `dex:COIN` syntax:
 openbroker buy --coin xyz:CL --size 1              # Buy crude oil on xyz dex
 openbroker sell --coin xyz:BRENTOIL --size 1        # Sell brent oil
 openbroker limit --coin xyz:GOLD --side buy --size 0.1 --price 2500
-openbroker funding-arb --coin xyz:CL --size 5000    # Funding arb on HIP-3
 ```
 
 ### Market Orders (Quick)
@@ -323,53 +322,6 @@ openbroker chase --coin ETH --side buy --size 0.5 --timeout 300
 
 # Aggressive chase with tight offset
 openbroker chase --coin SOL --side buy --size 10 --offset 2 --timeout 60
-```
-
-## Trading Strategies
-
-### Funding Arbitrage
-```bash
-# Collect funding on ETH if rate > 25% annualized
-openbroker funding-arb --coin ETH --size 5000 --min-funding 25
-
-# Run for 24 hours, check every 30 minutes
-openbroker funding-arb --coin BTC --size 10000 --duration 24 --check 30 --dry
-```
-
-### Grid Trading
-```bash
-# ETH grid from $3000-$4000 with 10 levels, 0.1 ETH per level
-openbroker grid --coin ETH --lower 3000 --upper 4000 --grids 10 --size 0.1
-
-# Accumulation grid (buys only)
-openbroker grid --coin BTC --lower 90000 --upper 100000 --grids 5 --size 0.01 --mode long
-```
-
-### DCA (Dollar Cost Averaging)
-```bash
-# Buy $100 of ETH every hour for 24 hours
-openbroker dca --coin ETH --amount 100 --interval 1h --count 24
-
-# Invest $5000 in BTC over 30 days with daily purchases
-openbroker dca --coin BTC --total 5000 --interval 1d --count 30
-```
-
-### Market Making Spread
-```bash
-# Market make ETH with 0.1 size, 10bps spread
-openbroker mm-spread --coin ETH --size 0.1 --spread 10
-
-# Tighter spread with position limit
-openbroker mm-spread --coin BTC --size 0.01 --spread 5 --max-position 0.1
-```
-
-### Maker-Only MM (ALO orders)
-```bash
-# Market make using ALO (post-only) orders - guarantees maker rebates
-openbroker mm-maker --coin HYPE --size 1 --offset 1
-
-# Wider offset for volatile assets
-openbroker mm-maker --coin ETH --size 0.1 --offset 2 --max-position 0.5
 ```
 
 ## Order Types
@@ -495,7 +447,24 @@ Without hooks, the watcher still runs and tracks state (accessible via `ob_watch
 
 ## Trading Automations
 
-Automations let you write custom event-driven trading logic as TypeScript scripts. Instead of using the rigid built-in strategies, write exactly the logic you need and OpenBroker handles the polling, event detection, and SDK access.
+Automations let you write custom event-driven trading logic as TypeScript scripts. Write exactly the logic you need and OpenBroker handles the polling, event detection, and SDK access.
+
+### IMPORTANT: Bundled Examples Are References, Not Ready-Made Strategies
+
+OpenBroker ships bundled automation examples (`dca`, `grid`, `funding-arb`, `mm-spread`, `mm-maker`) that demonstrate common patterns. **These examples are meant to be read and learned from — not run directly as production strategies.** When the user asks for a strategy (e.g. "run a DCA on HYPE"), you should:
+
+1. Read the relevant bundled example source code to understand the automation API patterns
+2. Write a **custom automation** tailored to the user's specific requirements (coin, size, thresholds, risk parameters, TP/SL logic, etc.)
+3. Save it to `~/.openbroker/automations/` and run it with `openbroker auto run`
+
+Do NOT simply run `openbroker auto run --example dca --set coin=HYPE`. The examples use generic defaults and lack the nuanced risk management, position sizing, and TP/SL logic that a real strategy needs. Always write a purpose-built automation.
+
+To view bundled examples and their config schemas:
+```bash
+openbroker auto examples    # List examples with config fields
+```
+
+Available examples: `dca`, `grid`, `funding-arb`, `mm-spread`, `mm-maker`
 
 ### How Automations Work
 
@@ -897,14 +866,17 @@ export default function(api) {
 openbroker auto run my-strategy --dry       # Test without trading
 openbroker auto run ./funding-scalp.ts      # Run from path
 openbroker auto run my-strategy --poll 5000 # Poll every 5s
+openbroker auto run --example dca --set coin=HYPE --set amount=50 --dry  # Run bundled example
+openbroker auto examples                    # List bundled examples with config
 openbroker auto list                        # Show available scripts
 openbroker auto status                      # Show running automations
 ```
 
 **Plugin tools (for OpenClaw agents):**
 - `ob_auto_run` — `{ "script": "funding-scalp", "dry": true }` — start an automation
+- `ob_auto_run` — `{ "example": "dca", "config": { "coin": "HYPE", "amount": 50 }, "dry": true }` — run a bundled example
 - `ob_auto_stop` — `{ "id": "funding-scalp" }` — stop a running automation
-- `ob_auto_list` — `{}` — list available and running automations
+- `ob_auto_list` — `{}` — list available automations, bundled examples with config schemas, and running automations
 
 **Options:**
 | Flag | Description | Default |
@@ -913,6 +885,8 @@ openbroker auto status                      # Show running automations
 | `--verbose` | Show debug output | false |
 | `--id <name>` | Custom automation ID | filename |
 | `--poll <ms>` | Poll interval in milliseconds | 10000 |
+| `--example <name>` | Run a bundled example automation | - |
+| `--set key=value` | Set config values (repeatable) | - |
 
 **Guidelines for agents writing automations:**
 

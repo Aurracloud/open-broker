@@ -1,7 +1,7 @@
 // CLI entry point for `openbroker auto` commands
 
 import { parseArgs } from '../core/utils.js';
-import { resolveScriptPath, listAutomations, ensureAutomationsDir } from './loader.js';
+import { resolveScriptPath, resolveExamplePath, listAutomations, listExamples, loadExampleConfigs, ensureAutomationsDir } from './loader.js';
 import { startAutomation, getRunningAutomations, getRegisteredAutomations } from './runtime.js';
 import { unregisterAutomation, cleanRegistry } from './registry.js';
 
@@ -11,12 +11,16 @@ OpenBroker Automations — event-driven trading scripts
 
 Usage:
   openbroker auto run <script> [options]    Run an automation script
+  openbroker auto run --example <name>      Run a bundled example automation
+  openbroker auto examples                  List bundled example automations
   openbroker auto stop <id>                 Unregister an automation (won't restart)
   openbroker auto list                      List available automations
   openbroker auto status                    Show running automations
   openbroker auto clean                     Remove stale entries from registry
 
 Options (for run):
+  --example <name>   Run a bundled example (dca, grid, funding-arb, mm-spread, mm-maker)
+  --set key=value    Set config values (repeatable, auto-parses numbers/booleans)
   --dry              Intercept write methods (no real trades)
   --verbose          Show debug output
   --id <name>        Custom automation ID (default: filename)
@@ -25,6 +29,7 @@ Options (for run):
 Scripts are loaded from:
   1. Absolute or relative path
   2. ~/.openbroker/automations/<name>.ts
+  3. Bundled examples (via --example)
 
 Writing an automation:
   export default function(api) {
@@ -37,21 +42,66 @@ Events: tick, price_change, funding_update, position_opened,
         position_closed, position_changed, pnl_threshold, margin_warning
 
 Examples:
-  openbroker auto run my-strategy --dry     # Test without trading
-  openbroker auto run ./funding-scalp.ts    # Run from path
-  openbroker auto list                      # Show available scripts
+  openbroker auto run --example dca --set coin=BTC --set amount=50 --dry
+  openbroker auto run --example grid --set coin=ETH --set lower=3000 --set upper=4000
+  openbroker auto run my-strategy --dry
+  openbroker auto examples
 `);
 }
 
-async function runCommand(args: Record<string, string | boolean>, positional: string[]) {
+/** Parse --set key=value flags from raw args, return parsed config object */
+function parseSetFlags(rawArgs: string[]): Record<string, unknown> {
+  const config: Record<string, unknown> = {};
+
+  for (let i = 0; i < rawArgs.length; i++) {
+    if (rawArgs[i] === '--set' && i + 1 < rawArgs.length) {
+      const pair = rawArgs[i + 1];
+      const eqIdx = pair.indexOf('=');
+      if (eqIdx === -1) {
+        console.error(`Error: --set requires key=value format, got: ${pair}`);
+        process.exit(1);
+      }
+      const key = pair.slice(0, eqIdx);
+      const raw = pair.slice(eqIdx + 1);
+
+      // Auto-parse numbers and booleans
+      if (raw === 'true') config[key] = true;
+      else if (raw === 'false') config[key] = false;
+      else if (raw !== '' && !isNaN(Number(raw))) config[key] = Number(raw);
+      else config[key] = raw;
+
+      i++; // skip the value
+    }
+  }
+
+  return config;
+}
+
+/** Strip --set key=value pairs from raw args so parseArgs doesn't see them */
+function stripSetFlags(rawArgs: string[]): string[] {
+  const result: string[] = [];
+  for (let i = 0; i < rawArgs.length; i++) {
+    if (rawArgs[i] === '--set' && i + 1 < rawArgs.length) {
+      i++; // skip --set and its value
+    } else {
+      result.push(rawArgs[i]);
+    }
+  }
+  return result;
+}
+
+async function runCommand(args: Record<string, string | boolean>, positional: string[], initialState: Record<string, unknown>) {
+  const exampleName = args.example ? String(args.example) : undefined;
   const scriptName = positional[0];
-  if (!scriptName) {
-    console.error('Error: script name or path required');
+
+  if (!scriptName && !exampleName) {
+    console.error('Error: script name or path required (or use --example <name>)');
     console.log('Usage: openbroker auto run <script> [--dry] [--verbose]');
+    console.log('       openbroker auto run --example <name> [--set key=value] [--dry]');
     process.exit(1);
   }
 
-  const scriptPath = resolveScriptPath(scriptName);
+  const scriptPath = exampleName ? resolveExamplePath(exampleName) : resolveScriptPath(scriptName!);
   const dryRun = args.dry === true;
   const verbose = args.verbose === true;
   const pollIntervalMs = args.poll ? parseInt(String(args.poll), 10) : 10_000;
@@ -68,6 +118,7 @@ async function runCommand(args: Record<string, string | boolean>, positional: st
     dryRun,
     verbose,
     pollIntervalMs,
+    initialState: Object.keys(initialState).length > 0 ? initialState : undefined,
   });
 
   // Graceful shutdown on SIGINT/SIGTERM
@@ -84,22 +135,58 @@ async function runCommand(args: Record<string, string | boolean>, positional: st
   await new Promise(() => {});
 }
 
-function listCommand() {
-  ensureAutomationsDir();
-  const automations = listAutomations();
+async function examplesCommand() {
+  const configs = await loadExampleConfigs();
+  const names = Object.keys(configs);
 
-  if (automations.length === 0) {
-    console.log('No automations found in ~/.openbroker/automations/');
-    console.log('\nCreate a .ts file there with:');
-    console.log('  export default function(api) { ... }');
+  if (names.length === 0) {
+    console.log('No bundled examples found.');
     return;
   }
 
-  console.log('Available automations:\n');
-  for (const a of automations) {
-    console.log(`  ${a.name.padEnd(30)} ${a.path}`);
+  console.log('Bundled example automations:\n');
+  for (const name of names) {
+    const cfg = configs[name];
+    console.log(`  ${name}`);
+    console.log(`    ${cfg.description}\n`);
+
+    console.log(`    Config (--set key=value):`);
+    for (const [key, field] of Object.entries(cfg.fields)) {
+      const def = JSON.stringify(field.default);
+      console.log(`      ${key.padEnd(14)} ${field.type.padEnd(8)} ${field.description} (default: ${def})`);
+    }
+    console.log('');
   }
-  console.log(`\nRun with: openbroker auto run <name>`);
+
+  console.log(`Run with: openbroker auto run --example <name> [--set key=value] [--dry]`);
+  console.log('Copy to ~/.openbroker/automations/ to customize.');
+}
+
+function listCommand() {
+  ensureAutomationsDir();
+  const automations = listAutomations();
+  const examples = listExamples();
+
+  if (automations.length === 0 && examples.length === 0) {
+    console.log('No automations found in ~/.openbroker/automations/');
+    console.log('\nCreate a .ts file there with:');
+    console.log('  export default function(api) { ... }');
+    console.log('\nOr run a bundled example: openbroker auto examples');
+    return;
+  }
+
+  if (automations.length > 0) {
+    console.log('User automations (~/.openbroker/automations/):\n');
+    for (const a of automations) {
+      console.log(`  ${a.name.padEnd(30)} ${a.path}`);
+    }
+    console.log(`\nRun with: openbroker auto run <name>`);
+  }
+
+  if (examples.length > 0) {
+    if (automations.length > 0) console.log('');
+    console.log(`${examples.length} bundled examples available — run: openbroker auto examples`);
+  }
 }
 
 function statusCommand() {
@@ -192,19 +279,23 @@ async function main() {
   const subcommand = rawArgs[0];
   const restArgs = rawArgs.slice(1);
 
+  // Parse --set flags before stripping them
+  const initialState = parseSetFlags(restArgs);
+  const cleanedArgs = stripSetFlags(restArgs);
+
   // Extract positional args (non-flag args)
   const positional: string[] = [];
   const flagArgs: string[] = [];
-  for (let i = 0; i < restArgs.length; i++) {
-    if (restArgs[i].startsWith('--')) {
-      flagArgs.push(restArgs[i]);
+  for (let i = 0; i < cleanedArgs.length; i++) {
+    if (cleanedArgs[i].startsWith('--')) {
+      flagArgs.push(cleanedArgs[i]);
       // If next arg doesn't start with --, it's a flag value
-      if (i + 1 < restArgs.length && !restArgs[i + 1].startsWith('--')) {
-        flagArgs.push(restArgs[i + 1]);
+      if (i + 1 < cleanedArgs.length && !cleanedArgs[i + 1].startsWith('--')) {
+        flagArgs.push(cleanedArgs[i + 1]);
         i++;
       }
     } else {
-      positional.push(restArgs[i]);
+      positional.push(cleanedArgs[i]);
     }
   }
 
@@ -212,13 +303,16 @@ async function main() {
 
   switch (subcommand) {
     case 'run':
-      await runCommand(args, positional);
+      await runCommand(args, positional, initialState);
       break;
     case 'stop':
       stopCommand(positional);
       break;
     case 'list':
       listCommand();
+      break;
+    case 'examples':
+      await examplesCommand();
       break;
     case 'status':
       statusCommand();

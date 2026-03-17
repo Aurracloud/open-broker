@@ -3,9 +3,14 @@
 import { existsSync, readdirSync, mkdirSync } from 'fs';
 import path from 'path';
 import os from 'os';
-import type { AutomationFactory } from './types.js';
+import { fileURLToPath } from 'url';
+import type { AutomationFactory, AutomationConfig } from './types.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const AUTOMATIONS_DIR = path.join(os.homedir(), '.openbroker', 'automations');
+const EXAMPLES_DIR = path.join(__dirname, 'examples');
 
 /** Resolve a script path from a name or path */
 export function resolveScriptPath(nameOrPath: string): string {
@@ -33,6 +38,47 @@ export function resolveScriptPath(nameOrPath: string): string {
     `Automation script not found: ${nameOrPath}\n` +
     `Searched:\n  ${cwdPath}\n  ${globalPath}\n  ${withExt}`,
   );
+}
+
+/** Resolve a bundled example by name */
+export function resolveExamplePath(name: string): string {
+  const examplePath = path.join(EXAMPLES_DIR, `${name}.ts`);
+  if (!existsSync(examplePath)) {
+    const available = listExamples().map(e => e.name).join(', ');
+    throw new Error(`Unknown example: ${name}\nAvailable: ${available}`);
+  }
+  return examplePath;
+}
+
+/** List bundled example automations */
+export function listExamples(): Array<{ name: string; path: string }> {
+  if (!existsSync(EXAMPLES_DIR)) return [];
+
+  return readdirSync(EXAMPLES_DIR)
+    .filter(f => f.endsWith('.ts') && !f.startsWith('.'))
+    .map(f => ({
+      name: f.replace(/\.ts$/, ''),
+      path: path.join(EXAMPLES_DIR, f),
+    }));
+}
+
+/** Load config metadata from all bundled examples */
+export async function loadExampleConfigs(): Promise<Record<string, AutomationConfig>> {
+  const examples = listExamples();
+  const configs: Record<string, AutomationConfig> = {};
+
+  for (const example of examples) {
+    try {
+      const mod = await import(example.path);
+      if (mod.config && typeof mod.config === 'object' && mod.config.description) {
+        configs[example.name] = mod.config as AutomationConfig;
+      }
+    } catch {
+      // Skip examples that fail to load
+    }
+  }
+
+  return configs;
 }
 
 /** Load an automation module and validate the default export */

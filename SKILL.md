@@ -4,7 +4,7 @@ description: Hyperliquid trading plugin with background position monitoring and 
 license: MIT
 compatibility: Requires Node.js 22+, network access to api.hyperliquid.xyz
 homepage: https://www.npmjs.com/package/openbroker
-metadata: {"author": "monemetrics", "version": "1.0.68", "openclaw": {"requires": {"bins": ["openbroker"], "env": ["HYPERLIQUID_PRIVATE_KEY"]}, "primaryEnv": "HYPERLIQUID_PRIVATE_KEY", "install": [{"id": "node", "kind": "node", "package": "openbroker", "bins": ["openbroker"], "label": "Install openbroker (npm)"}]}}
+metadata: {"author": "monemetrics", "version": "1.0.69", "openclaw": {"requires": {"bins": ["openbroker"], "env": ["HYPERLIQUID_PRIVATE_KEY"]}, "primaryEnv": "HYPERLIQUID_PRIVATE_KEY", "install": [{"id": "node", "kind": "node", "package": "openbroker", "bins": ["openbroker"], "label": "Install openbroker (npm)"}]}}
 allowed-tools: ob_account ob_positions ob_funding ob_markets ob_search ob_spot ob_fills ob_orders ob_order_status ob_fees ob_candles ob_funding_history ob_trades ob_rate_limit ob_funding_scan ob_buy ob_sell ob_limit ob_trigger ob_tpsl ob_cancel ob_twap ob_bracket ob_chase ob_watcher_status ob_auto_run ob_auto_stop ob_auto_list Bash(openbroker:*)
 ---
 
@@ -732,15 +732,86 @@ api.on('margin_warning', async ({ marginUsedPct, equity }) => {
 
 ### Client Methods Available
 
-The `api.client` object exposes the full Hyperliquid SDK:
+The `api.client` object exposes the full `HyperliquidClient`. All `coin` params accept HIP-3 prefixed tickers (e.g. `xyz:CL`). Optional `user` params default to the configured wallet address.
 
-**Trading:** `marketOrder(coin, isBuy, size)`, `limitOrder(coin, isBuy, size, price)`, `triggerOrder(coin, isBuy, size, triggerPx, isMarket)`, `takeProfit(coin, isBuy, size, triggerPx)`, `stopLoss(coin, isBuy, size, triggerPx)`, `cancel(coin, oid)`, `cancelAll(coin?)`
+#### Trading
 
-**Market Data:** `getAllMids()`, `getMetaAndAssetCtxs()`, `getRecentTrades(coin)`, `getCandleSnapshot(coin, interval)`, `getFundingHistory(coin)`, `getPredictedFundings()`
+| Method | Description |
+|--------|-------------|
+| `marketOrder(coin, isBuy, size, slippageBps?, leverage?)` | Market order via IOC limit at mid ± slippage. Returns `OrderResponse` |
+| `limitOrder(coin, isBuy, size, price, tif?, reduceOnly?, leverage?)` | Limit order. `tif`: `'Gtc'` (default), `'Ioc'`, `'Alo'`. Returns `OrderResponse` |
+| `triggerOrder(coin, isBuy, size, triggerPrice, limitPrice, tpsl, reduceOnly?, leverage?)` | Trigger (conditional) order. `tpsl`: `'tp'` or `'sl'`. Activates when price hits `triggerPrice`, then fills as limit at `limitPrice`. Returns `OrderResponse` |
+| `stopLoss(coin, isBuy, size, triggerPrice, slippageBps?)` | Stop loss shortcut. Sets limit price with slippage buffer (default 100 bps / 1%) to ensure fill. `reduceOnly` is always true. Returns `OrderResponse` |
+| `takeProfit(coin, isBuy, size, triggerPrice)` | Take profit shortcut. Limit price = trigger price (favorable direction). `reduceOnly` is always true. Returns `OrderResponse` |
+| `cancel(coin, oid)` | Cancel a single order by numeric OID. Returns `CancelResponse` |
+| `cancelAll(coin?)` | Cancel all open orders. If `coin` is provided, only cancels orders for that asset. Returns `CancelResponse[]` |
+| `order(coin, isBuy, size, price, orderType, reduceOnly?, includeBuilder?, leverage?)` | Low-level order placement. `orderType`: `{ limit: { tif: 'Gtc' | 'Ioc' | 'Alo' } }`. Automatically injects builder fee, rounds price/size, and handles HIP-3 margin setup. Returns `OrderResponse` |
 
-**Account:** `getUserStateAll()`, `getOpenOrders()`, `getUserFills()`, `getUserFunding()`, `getHistoricalOrders()`, `getUserFees()`, `getUserRateLimit()`, `getSpotBalances()`
+#### Market Data
 
-**Leverage:** `updateLeverage(coin, leverage, isIsolated?)`
+| Method | Returns |
+|--------|---------|
+| `getAllMids()` | `Record<string, string>` — mid prices for all assets (main + HIP-3). Key = coin name, value = price string |
+| `getMetaAndAssetCtxs()` | `MetaAndAssetCtxs` — market metadata (universe of assets with `szDecimals`, `maxLeverage`) and asset contexts (funding, open interest, volume, mark/oracle prices) |
+| `getL2Book(coin)` | `{ bids, asks, bestBid, bestAsk, midPrice, spread, spreadBps }` — L2 order book with computed spread |
+| `getRecentTrades(coin)` | `Array<{ coin, side, px, sz, time, hash, tid }>` — recent trade tape. `side`: `'B'` (buy) or `'A'` (sell) |
+| `getCandleSnapshot(coin, interval, startTime, endTime?)` | `Array<{ t, T, s, i, o, c, h, l, v, n }>` — OHLCV candles. `interval`: `'1m'`, `'5m'`, `'15m'`, `'1h'`, `'4h'`, `'1d'`. Times are Unix ms |
+| `getFundingHistory(coin, startTime, endTime?)` | `Array<{ coin, fundingRate, premium, time }>` — historical hourly funding rates |
+| `getPredictedFundings()` | `Array<[coin, Array<[venue, { fundingRate, nextFundingTime }]>]>` — predicted funding rates across all venues |
+| `getPerpDexs()` | `Array<{ name, fullName, deployer } | null>` — list of perp DEXs. Index 0 is `null` (main), rest are HIP-3 |
+| `getAllPerpMetas()` | `Array<{ dexName, meta, assetCtxs }>` — metadata + contexts for every perp DEX (main + all HIP-3) |
+| `getSpotMeta()` | `{ tokens, universe }` — spot market metadata (token info, trading pairs) |
+| `getSpotMetaAndAssetCtxs()` | `{ meta, assetCtxs }` — spot metadata + price/volume contexts |
+| `getTokenDetails(tokenId)` | Token details: supply, deployer, prices. Returns `null` if not found |
+
+#### Account
+
+| Method | Returns |
+|--------|---------|
+| `getUserStateAll(user?)` | `ClearinghouseState` — full account state across all dexes: `marginSummary` (accountValue, totalMarginUsed, withdrawable), `crossMarginSummary`, and `assetPositions[]` (each with `position.coin`, `.szi`, `.entryPx`, `.unrealizedPnl`, `.positionValue`, `.leverage`, `.marginUsed`, `.liquidationPx`) |
+| `getUserState(user?, dex?)` | `ClearinghouseState` — account state for a single dex (omit `dex` for main perps) |
+| `getOpenOrders(user?)` | `OpenOrder[]` — all open orders across all dexes. Each: `{ coin, side, limitPx, sz, oid, timestamp, orderType }` |
+| `getUserFills(user?, aggregateByTime?)` | `Array<{ coin, px, sz, side, time, closedPnl, fee, oid, tid, crossed, builderFee }>` — trade fill history. `side`: `'B'` (buy) or `'A'` (sell) |
+| `getHistoricalOrders(user?)` | `Array<{ order: { coin, side, limitPx, sz, origSz, oid, timestamp, orderType, tif, triggerCondition, triggerPx, isTrigger, isPositionTpsl, reduceOnly }, status, statusTimestamp }>` — all orders (filled, cancelled, etc.) |
+| `getOrderStatus(oid, user?)` | `{ status, order? }` — status of a specific order by numeric OID or string CLOID |
+| `getUserFunding(user?, startTime?, endTime?)` | `Array<{ time, hash, delta: { coin, usdc, szi, fundingRate } }>` — funding payments received/paid |
+| `getUserFees(user?)` | `{ dailyUserVlm, feeSchedule, userCrossRate, userAddRate, activeReferralDiscount, activeStakingDiscount }` — fee tier, rates, and volume |
+| `getUserRateLimit(user?)` | `{ cumVlm, nRequestsUsed, nRequestsCap, nRequestsSurplus }` — API rate limit status |
+| `getSpotBalances(user?)` | `{ balances: Array<{ coin, token, hold, total, entryNtl }> }` — spot token balances |
+| `getSubAccounts(user?)` | `Array<{ subAccountUser, name }>` — sub-accounts for a master wallet |
+| `getAccountMode(user?)` | `string` — account abstraction mode: `'standard'`, `'unified'`, `'portfolio'`, or `'dexAbstraction'` |
+| `isUnifiedAccount(user?)` | `boolean` — `true` if unified or portfolio margin (shared USDC across dexes) |
+
+#### Leverage & Config
+
+| Method | Description |
+|--------|-------------|
+| `updateLeverage(coin, leverage, isCross?)` | Set leverage. `isCross` defaults to `true` (cross margin). HIP-3 assets are forced to isolated and clamped to their max leverage |
+| `approveBuilderFee(maxFeeRate?, builder?)` | Approve builder fee (must be called from main wallet, not API wallet). Default rate: `'0.1%'` |
+| `getMaxBuilderFee(user?, builder?)` | Check approved builder fee. Returns fee string (e.g. `'0.01%'`) or `null` if not approved |
+
+#### Utility Properties
+
+| Property / Method | Description |
+|-------------------|-------------|
+| `getAssetIndex(coin)` | Get numeric asset index for a coin (used internally for order wire) |
+| `getSzDecimals(coin)` | Get size decimal precision for a coin |
+| `isHip3(coin)` | Check if a coin is a HIP-3 asset |
+| `getCoinDex(coin)` | Get dex name for a coin (`null` for main perps) |
+| `getAllAssetNames()` | Get all known asset names (main + HIP-3) |
+| `getHip3AssetNames()` | Get only HIP-3 asset names |
+| `invalidateMetaCache()` | Force refresh of market metadata on next call |
+
+#### Utility Functions (`api.utils`)
+
+| Function | Description |
+|----------|-------------|
+| `roundPrice(price, szDecimals, isSpot?)` | Round price to 5 significant figures (max 6 decimals perp, 8 spot) |
+| `roundSize(size, szDecimals)` | Round size to asset-specific decimal precision |
+| `sleep(ms)` | Promise-based delay |
+| `normalizeCoin(coin)` | Normalize coin name (uppercase, trim whitespace) |
+| `formatUsd(amount)` | Format number as USD string (e.g. `$1,234.56`) |
+| `annualizeFundingRate(hourlyRate)` | Convert hourly funding rate to annualized percentage |
 
 ### Example: Price Breakout
 

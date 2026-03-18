@@ -109,6 +109,13 @@ async function main() {
       console.log(`Builder Approved: ❌ No`);
       console.log(`\n⚠️  Run: npx tsx scripts/setup/approve-builder.ts`);
     }
+
+    // Warn if API wallet setup looks misconfigured
+    if (!client.isApiWallet && accountValue === 0 && positions.length === 0) {
+      console.log('\n⚠️  No positions and $0 equity.');
+      console.log('   If this account is traded via an API wallet, set HYPERLIQUID_ACCOUNT_ADDRESS');
+      console.log('   in ~/.openbroker/.env to the master account address (the wallet that holds funds).');
+    }
     console.log('');
 
     console.log('Margin Summary');

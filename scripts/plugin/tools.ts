@@ -89,6 +89,11 @@ export function createTools(watcherOrCtx: PositionWatcher | null | ToolsContext)
           }));
         }
 
+        // Warn if likely misconfigured API wallet (querying the API wallet address instead of master)
+        if (!client.isApiWallet && accountValue === 0 && state.assetPositions.filter(ap => parseFloat(ap.position.szi) !== 0).length === 0) {
+          result.warning = 'No positions and $0 equity. If using an API wallet, ensure HYPERLIQUID_ACCOUNT_ADDRESS is set to the master account address in ~/.openbroker/.env or plugin config.';
+        }
+
         return json(result);
       },
     },

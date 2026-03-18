@@ -71,6 +71,10 @@ async function main() {
 
     if (positions.length === 0) {
       console.log(filterCoin ? `No position in ${filterCoin}` : 'No open positions');
+      if (!filterCoin && !client.isApiWallet) {
+        console.log('\n⚠️  If this account is traded via an API wallet, set HYPERLIQUID_ACCOUNT_ADDRESS');
+        console.log('   in ~/.openbroker/.env to the master account address.');
+      }
       return;
     }
 

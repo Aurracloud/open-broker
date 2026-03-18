@@ -231,34 +231,85 @@ async function main(): Promise<OnboardResult> {
 
   // Check if config already exists
   if (fs.existsSync(CONFIG_PATH)) {
-    console.log('⚠️  Config already exists!');
-    console.log(`   Location: ${CONFIG_PATH}\n`);
-
-    // Read existing config and show wallet address
     const envContent = fs.readFileSync(CONFIG_PATH, 'utf-8');
     const keyMatch = envContent.match(/HYPERLIQUID_PRIVATE_KEY=0x([a-fA-F0-9]{64})/);
 
-    if (keyMatch) {
-      const existingKey = `0x${keyMatch[1]}` as `0x${string}`;
-      const account = privateKeyToAccount(existingKey);
-      console.log('Current Configuration');
-      console.log('---------------------');
-      console.log(`Wallet Address: ${account.address}`);
-      console.log(`Config File:    ${CONFIG_PATH}`);
-      console.log(`\nTo reconfigure, delete the config file first:`);
-      console.log(`  rm ${CONFIG_PATH}`);
-      console.log(`\nTo fund this wallet, send USDC on Arbitrum, then deposit at:`);
-      console.log(`  https://app.hyperliquid.xyz/`);
-
+    if (!keyMatch) {
       return {
-        success: true,
-        walletAddress: account.address,
+        success: false,
+        error: 'Invalid config file - missing or malformed private key',
       };
     }
 
+    const existingKey = `0x${keyMatch[1]}` as `0x${string}`;
+    const account = privateKeyToAccount(existingKey);
+
+    // Check if this is an incomplete API wallet setup (HYPERLIQUID_ACCOUNT_ADDRESS missing or commented out)
+    const hasAccountAddress = /^HYPERLIQUID_ACCOUNT_ADDRESS=0x[a-fA-F0-9]{40}/m.test(envContent);
+    const isIncompleteApiWallet = envContent.includes('INCOMPLETE') || envContent.includes('# HYPERLIQUID_ACCOUNT_ADDRESS');
+
+    if (!hasAccountAddress && isIncompleteApiWallet) {
+      console.log('⚠️  Incomplete API wallet setup detected!');
+      console.log(`   API Wallet: ${account.address}`);
+      console.log(`   Master account address is missing — re-polling for approval...\n`);
+
+      const approveUrl = `${OPENBROKER_URL}/approve?agent=${account.address}`;
+      console.log(`   If not yet approved, visit: ${approveUrl}\n`);
+
+      const masterAddress = await pollForApproval(account.address);
+
+      if (masterAddress) {
+        console.log(`\n✅ Master wallet detected: ${masterAddress}`);
+
+        // Verify builder fee on-chain
+        console.log('   Verifying builder fee approval...');
+        const feeApproved = await verifyBuilderFee(masterAddress);
+        if (feeApproved) {
+          console.log('   ✅ Builder fee: approved on-chain');
+        } else {
+          console.log('   ⚠️  Builder fee not yet confirmed on-chain (may take a moment)');
+        }
+
+        // Save complete config
+        const completeEnv = buildApiWalletEnvContent(existingKey, masterAddress);
+        fs.writeFileSync(CONFIG_PATH, completeEnv, { mode: 0o600 });
+
+        console.log(`\n✅ Config updated: ${CONFIG_PATH}`);
+        console.log(`   API Wallet:     ${account.address}`);
+        console.log(`   Master Account: ${masterAddress}`);
+        console.log('\n   Start trading: openbroker account');
+
+        return { success: true, walletAddress: account.address };
+      }
+
+      console.log('\n⚠️  Approval still not completed.');
+      console.log(`   Visit: ${approveUrl}`);
+      console.log('   Then re-run: openbroker setup\n');
+      return { success: false, error: 'Approval not completed' };
+    }
+
+    // Config exists and is complete
+    console.log('⚠️  Config already exists!');
+    console.log(`   Location: ${CONFIG_PATH}\n`);
+    console.log('Current Configuration');
+    console.log('---------------------');
+    console.log(`Wallet Address: ${account.address}`);
+    if (hasAccountAddress) {
+      const addrMatch = envContent.match(/HYPERLIQUID_ACCOUNT_ADDRESS=(0x[a-fA-F0-9]+)/);
+      if (addrMatch) {
+        console.log(`Master Account: ${addrMatch[1]}`);
+        console.log(`Wallet Type:    API Wallet`);
+      }
+    }
+    console.log(`Config File:    ${CONFIG_PATH}`);
+    console.log(`\nTo reconfigure, delete the config file first:`);
+    console.log(`  rm ${CONFIG_PATH}`);
+    console.log(`\nTo fund this wallet, send USDC on Arbitrum, then deposit at:`);
+    console.log(`  https://app.hyperliquid.xyz/`);
+
     return {
-      success: false,
-      error: 'Invalid config file - missing or malformed private key',
+      success: true,
+      walletAddress: account.address,
     };
   }
 

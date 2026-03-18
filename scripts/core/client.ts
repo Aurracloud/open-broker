@@ -1126,7 +1126,18 @@ export class HyperliquidClient {
     const params: { user: string; dex?: string } = { user: user ?? this.address };
     if (dex !== undefined) params.dex = dex;
     const response = await this.info.clearinghouseState(params as any);
-    return response as ClearinghouseState;
+
+    // The SDK response has `withdrawable` as a top-level field, not inside
+    // marginSummary/crossMarginSummary. Copy it into our MarginSummary shape.
+    const state = response as unknown as ClearinghouseState;
+    const withdrawable = (response as any).withdrawable ?? '0';
+    if (state.marginSummary) {
+      state.marginSummary.withdrawable = withdrawable;
+    }
+    if (state.crossMarginSummary) {
+      state.crossMarginSummary.withdrawable = withdrawable;
+    }
+    return state;
   }
 
   /**
@@ -1142,6 +1153,7 @@ export class HyperliquidClient {
     const dexs = await this.getPerpDexs();
 
     // Collect positions from all HIP-3 dexes
+    let hip3Errors = 0;
     for (let i = 1; i < dexs.length; i++) {
       const dex = dexs[i];
       if (!dex) continue;
@@ -1156,20 +1168,30 @@ export class HyperliquidClient {
         if (!unified) {
           const dexMargin = dexState.marginSummary;
           if (dexMargin) {
+            const safeAdd = (a: string | undefined, b: string | undefined): string => {
+              const va = parseFloat(a ?? '0') || 0;
+              const vb = parseFloat(b ?? '0') || 0;
+              return String(va + vb);
+            };
             const addToSummary = (summary: { accountValue: string; totalNtlPos: string; totalRawUsd: string; totalMarginUsed: string; withdrawable: string }) => {
-              summary.accountValue = String(parseFloat(summary.accountValue) + parseFloat(dexMargin.accountValue));
-              summary.totalNtlPos = String(parseFloat(summary.totalNtlPos) + parseFloat(dexMargin.totalNtlPos));
-              summary.totalRawUsd = String(parseFloat(summary.totalRawUsd) + parseFloat(dexMargin.totalRawUsd));
-              summary.totalMarginUsed = String(parseFloat(summary.totalMarginUsed) + parseFloat(dexMargin.totalMarginUsed));
-              summary.withdrawable = String(parseFloat(summary.withdrawable) + parseFloat(dexMargin.withdrawable));
+              summary.accountValue = safeAdd(summary.accountValue, dexMargin.accountValue);
+              summary.totalNtlPos = safeAdd(summary.totalNtlPos, dexMargin.totalNtlPos);
+              summary.totalRawUsd = safeAdd(summary.totalRawUsd, dexMargin.totalRawUsd);
+              summary.totalMarginUsed = safeAdd(summary.totalMarginUsed, dexMargin.totalMarginUsed);
+              summary.withdrawable = safeAdd(summary.withdrawable, dexMargin.withdrawable);
             };
             addToSummary(mainState.marginSummary);
             addToSummary(mainState.crossMarginSummary);
           }
         }
       } catch (err) {
+        hip3Errors++;
         this.log(`Failed to fetch state for dex ${dex.name}:`, err instanceof Error ? err.message : String(err));
       }
+    }
+
+    if (hip3Errors > 0) {
+      this.log(`Warning: ${hip3Errors} HIP-3 dex queries failed — some positions may be missing. Use --verbose for details.`);
     }
 
     // For unified accounts: equity is the USDC balance from spot clearinghouse

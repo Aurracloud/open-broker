@@ -1231,35 +1231,137 @@ export function createTools(watcherOrCtx: PositionWatcher | null | ToolsContext)
 
     {
       name: 'ob_twap',
-      description: 'Execute a TWAP (time-weighted average price) order, splitting a large order into smaller slices over time. This is a long-running command.',
+      description: 'Place a native Hyperliquid TWAP order. The exchange handles order slicing and timing server-side. Returns immediately with a TWAP ID.',
       parameters: {
         type: 'object',
         properties: {
-          coin: { type: 'string', description: 'Asset symbol' },
+          coin: { type: 'string', description: 'Asset symbol (e.g., ETH, BTC)' },
           side: { type: 'string', enum: ['buy', 'sell'], description: 'Order direction' },
-          size: { type: 'number', description: 'Total order size' },
-          duration: { type: 'number', description: 'Duration in seconds' },
-          intervals: { type: 'number', description: 'Number of slices' },
-          randomize: { type: 'number', description: 'Randomize timing by this % (0-50)' },
+          size: { type: 'number', description: 'Total order size in base asset' },
+          duration: { type: 'number', description: 'Duration in minutes (5–1440)' },
+          randomize: { type: 'boolean', description: 'Randomize timing (default: true)' },
+          reduce_only: { type: 'boolean', description: 'Reduce-only order (default: false)' },
           leverage: { type: 'number', description: 'Set leverage (e.g., 10 for 10x)' },
-          dry: { type: 'boolean', description: 'Preview without executing' },
         },
         required: ['coin', 'side', 'size', 'duration'],
       },
       async execute(_id, params) {
-        const { execFile } = await import('node:child_process');
-        const args = ['twap'];
-        for (const [key, value] of Object.entries(params)) {
-          if (value === undefined || value === null || value === false || value === '') continue;
-          if (value === true) args.push(`--${key}`);
-          else args.push(`--${key}`, String(value));
+        const { getClient } = await import('../core/client.js');
+        const coin = normalizeCoin(params.coin as string);
+        const isBuy = params.side === 'buy';
+        const size = params.size as number;
+        const durationMinutes = params.duration as number;
+        const randomize = params.randomize !== false;
+        const reduceOnly = params.reduce_only === true;
+        const leverage = params.leverage as number | undefined;
+
+        if (durationMinutes < 5 || durationMinutes > 1440) {
+          return error('Duration must be between 5 and 1440 minutes');
         }
 
-        return new Promise((resolve) => {
-          execFile('openbroker', args, { timeout: 600_000 }, (_err, stdout, stderr) => {
-            resolve({ content: [{ type: 'text' as const, text: (stdout + (stderr || '')).trim() }] });
-          });
-        });
+        try {
+          const client = getClient();
+          const mids = await client.getAllMids();
+          const midPrice = parseFloat(mids[coin]);
+
+          const response = await client.twapOrder(coin, isBuy, size, durationMinutes, randomize, reduceOnly, leverage);
+          const status = response.response.data.status;
+
+          if ('running' in status) {
+            return json({
+              twapId: status.running.twapId,
+              coin,
+              side: isBuy ? 'buy' : 'sell',
+              size,
+              durationMinutes,
+              randomize,
+              reduceOnly,
+              estimatedNotional: midPrice ? midPrice * size : undefined,
+              midPrice: midPrice || undefined,
+            });
+          } else if ('error' in status) {
+            return error(status.error);
+          }
+          return error('Unexpected response');
+        } catch (err) {
+          return error(err instanceof Error ? err.message : String(err));
+        }
+      },
+    },
+
+    {
+      name: 'ob_twap_cancel',
+      description: 'Cancel a running native Hyperliquid TWAP order by its TWAP ID.',
+      parameters: {
+        type: 'object',
+        properties: {
+          coin: { type: 'string', description: 'Asset symbol (e.g., ETH)' },
+          twap_id: { type: 'number', description: 'TWAP order ID to cancel' },
+        },
+        required: ['coin', 'twap_id'],
+      },
+      async execute(_id, params) {
+        const { getClient } = await import('../core/client.js');
+        const coin = normalizeCoin(params.coin as string);
+        const twapId = params.twap_id as number;
+
+        try {
+          const client = getClient();
+          const response = await client.twapCancel(coin, twapId);
+          const status = response.response.data.status;
+
+          if (typeof status === 'string' && status === 'success') {
+            return json({ cancelled: true, coin, twapId });
+          } else if (typeof status === 'object' && 'error' in status) {
+            return error(status.error);
+          }
+          return error('Unexpected response');
+        } catch (err) {
+          return error(err instanceof Error ? err.message : String(err));
+        }
+      },
+    },
+
+    {
+      name: 'ob_twap_status',
+      description: 'View TWAP order history and status. Shows active and past TWAP orders.',
+      parameters: {
+        type: 'object',
+        properties: {
+          active: { type: 'boolean', description: 'Only show active/running TWAP orders' },
+        },
+      },
+      async execute(_id, params) {
+        const { getClient } = await import('../core/client.js');
+
+        try {
+          const client = getClient();
+          const history = await client.twapHistory();
+
+          const filtered = params.active
+            ? history.filter((h: { status: { status: string } }) => h.status.status === 'activated')
+            : history;
+
+          return json(filtered.map((entry: {
+            twapId?: number;
+            state: { coin: string; side: string; sz: string; executedSz: string; executedNtl: string; minutes: number; randomize: boolean; reduceOnly: boolean; timestamp: number };
+            status: { status: string; description?: string };
+          }) => ({
+            twapId: entry.twapId,
+            coin: entry.state.coin,
+            side: entry.state.side === 'B' ? 'buy' : 'sell',
+            totalSize: entry.state.sz,
+            executedSize: entry.state.executedSz,
+            executedNotional: entry.state.executedNtl,
+            durationMinutes: entry.state.minutes,
+            randomize: entry.state.randomize,
+            reduceOnly: entry.state.reduceOnly,
+            status: entry.status.status,
+            startedAt: new Date(entry.state.timestamp).toISOString(),
+          })));
+        } catch (err) {
+          return error(err instanceof Error ? err.message : String(err));
+        }
       },
     },
 

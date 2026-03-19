@@ -4,8 +4,8 @@ description: Hyperliquid trading plugin with background position monitoring and 
 license: MIT
 compatibility: Requires Node.js 22+, network access to api.hyperliquid.xyz
 homepage: https://www.npmjs.com/package/openbroker
-metadata: {"author": "monemetrics", "version": "1.0.70", "openclaw": {"requires": {"bins": ["openbroker"], "env": ["HYPERLIQUID_PRIVATE_KEY"]}, "primaryEnv": "HYPERLIQUID_PRIVATE_KEY", "install": [{"id": "node", "kind": "node", "package": "openbroker", "bins": ["openbroker"], "label": "Install openbroker (npm)"}]}}
-allowed-tools: ob_account ob_positions ob_funding ob_markets ob_search ob_spot ob_fills ob_orders ob_order_status ob_fees ob_candles ob_funding_history ob_trades ob_rate_limit ob_funding_scan ob_buy ob_sell ob_limit ob_trigger ob_tpsl ob_cancel ob_twap ob_bracket ob_chase ob_watcher_status ob_auto_run ob_auto_stop ob_auto_list Bash(openbroker:*)
+metadata: {"author": "monemetrics", "version": "1.0.71", "openclaw": {"requires": {"bins": ["openbroker"], "env": ["HYPERLIQUID_PRIVATE_KEY"]}, "primaryEnv": "HYPERLIQUID_PRIVATE_KEY", "install": [{"id": "node", "kind": "node", "package": "openbroker", "bins": ["openbroker"], "label": "Install openbroker (npm)"}]}}
+allowed-tools: ob_account ob_positions ob_funding ob_markets ob_search ob_spot ob_fills ob_orders ob_order_status ob_fees ob_candles ob_funding_history ob_trades ob_rate_limit ob_funding_scan ob_buy ob_sell ob_limit ob_trigger ob_tpsl ob_cancel ob_twap ob_twap_cancel ob_twap_status ob_bracket ob_chase ob_watcher_status ob_auto_run ob_auto_stop ob_auto_list Bash(openbroker:*)
 ---
 
 # Open Broker - Hyperliquid Trading CLI
@@ -73,7 +73,7 @@ If an `ob_*` plugin tool returns unexpected errors, empty results, or crashes, *
 **When to use CLI fallback:**
 - Plugin tool returns `null`, empty data, or throws an error
 - You need data the plugin tool doesn't expose (e.g., `--verbose` debug output)
-- Long-running operations (strategies, TWAP) — the CLI handles timeouts and progress better
+- Long-running operations (strategies) — the CLI handles timeouts and progress better
 
 Add `--dry` to any trading CLI command to preview without executing. Add `--json` to info commands for structured output.
 
@@ -288,13 +288,19 @@ openbroker cancel --oid 123456    # Cancel specific order
 
 ## Advanced Execution
 
-### TWAP (Time-Weighted Average Price)
+### TWAP (Native Exchange Order)
 ```bash
-# Execute 1 ETH buy over 1 hour (auto-calculates slices)
-openbroker twap --coin ETH --side buy --size 1 --duration 3600
+# Buy 1 ETH over 30 minutes (exchange handles slicing)
+openbroker twap --coin ETH --side buy --size 1 --duration 30
 
-# Custom intervals with randomization
-openbroker twap --coin BTC --side sell --size 0.5 --duration 1800 --intervals 6 --randomize 20
+# Sell 0.5 BTC over 2 hours without randomized timing
+openbroker twap --coin BTC --side sell --size 0.5 --duration 120 --randomize false
+
+# Cancel a running TWAP
+openbroker twap-cancel --coin ETH --twap-id 77738308
+
+# Check TWAP status
+openbroker twap-status --active
 ```
 
 ### Scale In/Out (Grid Orders)

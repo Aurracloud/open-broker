@@ -41,7 +41,9 @@ const commands: Record<string, { script: string; description: string }> = {
   'trigger': { script: 'operations/trigger-order.ts', description: 'Trigger order (TP/SL)' },
   'tpsl': { script: 'operations/set-tpsl.ts', description: 'Set TP/SL on position' },
   'cancel': { script: 'operations/cancel.ts', description: 'Cancel orders' },
-  'twap': { script: 'operations/twap.ts', description: 'TWAP execution' },
+  'twap': { script: 'operations/twap.ts', description: 'Native TWAP order' },
+  'twap-cancel': { script: 'operations/twap-cancel.ts', description: 'Cancel a TWAP order' },
+  'twap-status': { script: 'operations/twap-status.ts', description: 'View TWAP order status' },
   'scale': { script: 'operations/scale.ts', description: 'Scale in/out orders' },
   'bracket': { script: 'operations/bracket.ts', description: 'Bracket order (entry + TP + SL)' },
   'chase': { script: 'operations/chase.ts', description: 'Chase order with ALO' },
@@ -87,7 +89,9 @@ Trading Commands:
   cancel               Cancel orders
 
 Advanced Execution:
-  twap                 Time-weighted average price execution
+  twap                 Native TWAP order (exchange-managed)
+  twap-cancel          Cancel a running TWAP order
+  twap-status          View TWAP order history/status
   scale                Scale in/out with multiple orders
   bracket              Entry with TP and SL
   chase                Chase price with ALO orders

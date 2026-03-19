@@ -1,6 +1,6 @@
 {
   "name": "openbroker",
-  "version": "1.0.70",
+  "version": "1.0.71",
   "description": "Hyperliquid trading CLI - execute orders, manage positions, and run trading strategies",
   "type": "module",
   "bin": {
@@ -35,6 +35,8 @@
     "set-tpsl": "tsx scripts/operations/set-tpsl.ts",
     "cancel": "tsx scripts/operations/cancel.ts",
     "twap": "tsx scripts/operations/twap.ts",
+    "twap-cancel": "tsx scripts/operations/twap-cancel.ts",
+    "twap-status": "tsx scripts/operations/twap-status.ts",
     "scale": "tsx scripts/operations/scale.ts",
     "bracket": "tsx scripts/operations/bracket.ts",
     "chase": "tsx scripts/operations/chase.ts",

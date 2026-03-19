@@ -1638,6 +1638,90 @@ export class HyperliquidClient {
       throw error;
     }
   }
+
+  /**
+   * Place a native Hyperliquid TWAP order.
+   * The exchange handles slicing and timing server-side.
+   * @param coin Asset symbol (e.g. "ETH")
+   * @param isBuy true for long, false for short
+   * @param size Total size in base currency
+   * @param durationMinutes Duration in minutes (5–1440)
+   * @param randomize Enable random order timing
+   * @param reduceOnly Reduce-only flag
+   * @param leverage Optional leverage to set before placing the TWAP
+   */
+  async twapOrder(
+    coin: string,
+    isBuy: boolean,
+    size: number,
+    durationMinutes: number,
+    randomize: boolean = true,
+    reduceOnly: boolean = false,
+    leverage?: number
+  ) {
+    await this.getMetaAndAssetCtxs();
+
+    if (leverage) {
+      await this.setLeverage(coin, leverage);
+    }
+
+    const assetIndex = this.getAssetIndex(coin);
+    const roundedSize = roundSize(size, this.getSzDecimals(coin));
+
+    this.log(`TWAP order: ${coin} (asset ${assetIndex}) ${isBuy ? 'BUY' : 'SELL'} ${roundedSize} over ${durationMinutes}m, randomize=${randomize}, reduceOnly=${reduceOnly}`);
+
+    try {
+      const response = await this.exchange.twapOrder({
+        twap: {
+          a: assetIndex,
+          b: isBuy,
+          s: String(roundedSize),
+          r: reduceOnly,
+          m: durationMinutes,
+          t: randomize,
+        },
+      });
+      this.log('TWAP order response:', JSON.stringify(response, null, 2));
+      return response;
+    } catch (error) {
+      this.log('TWAP order error:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Cancel a running TWAP order.
+   * @param coin Asset symbol (e.g. "ETH")
+   * @param twapId The TWAP order ID to cancel
+   */
+  async twapCancel(coin: string, twapId: number) {
+    await this.getMetaAndAssetCtxs();
+
+    const assetIndex = this.getAssetIndex(coin);
+
+    this.log(`TWAP cancel: ${coin} (asset ${assetIndex}) twapId=${twapId}`);
+
+    try {
+      const response = await this.exchange.twapCancel({
+        a: assetIndex,
+        t: twapId,
+      });
+      this.log('TWAP cancel response:', JSON.stringify(response, null, 2));
+      return response;
+    } catch (error) {
+      this.log('TWAP cancel error:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get TWAP order history for the current user.
+   */
+  async twapHistory() {
+    const response = await this.info.twapHistory({ user: this.address as `0x${string}` });
+    this.log('TWAP history:', JSON.stringify(response, null, 2));
+    return response;
+  }
 }
 
 // Singleton instance

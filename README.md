@@ -383,16 +383,19 @@ openbroker cancel --all --dry              # Preview what would be cancelled
 
 ### Advanced Execution
 
-#### `twap` — Time-Weighted Average Price
+#### `twap` — Native TWAP Order
 
-Split a large order into smaller slices executed at regular intervals to minimize market impact.
+Place a native Hyperliquid TWAP order. The exchange handles order slicing and execution timing server-side — returns immediately with a TWAP ID.
 
 ```bash
-# Buy 1 ETH over 1 hour (auto ~12 slices)
-openbroker twap --coin ETH --side buy --size 1 --duration 3600
+# Buy 1 ETH over 30 minutes
+openbroker twap --coin ETH --side buy --size 1 --duration 30
 
-# Sell 0.5 BTC over 30 min, 6 slices, randomized timing
-openbroker twap --coin BTC --side sell --size 0.5 --duration 1800 --intervals 6 --randomize 20
+# Sell 0.5 BTC over 2 hours without randomized timing
+openbroker twap --coin BTC --side sell --size 0.5 --duration 120 --randomize false
+
+# Preview order details
+openbroker twap --coin ETH --side buy --size 2 --duration 60 --dry
 ```
 
 | Flag | Description | Default |
@@ -400,14 +403,38 @@ openbroker twap --coin BTC --side sell --size 0.5 --duration 1800 --intervals 6 
 | `--coin` | Asset to trade | **required** |
 | `--side` | `buy` or `sell` | **required** |
 | `--size` | Total order size in base asset | **required** |
-| `--duration` | Total execution time in seconds | **required** |
-| `--intervals` | Number of slices | 1 per 5 min |
-| `--randomize` | Randomize timing by ±X percent | `0` |
-| `--slippage` | Slippage per slice in bps | `50` |
-| `--dry` | Show execution plan without trading | — |
+| `--duration` | Duration in minutes (5–1440) | **required** |
+| `--randomize` | Randomize execution timing | `true` |
+| `--reduce-only` | Reduce-only order | `false` |
+| `--leverage` | Set leverage before placing | — |
+| `--dry` | Show order details without placing | — |
 | `--verbose` | Show debug output | — |
 
-Reports VWAP, actual slippage, fill rate, and total execution time.
+#### `twap-cancel` — Cancel TWAP Order
+
+Cancel a running native TWAP order by its TWAP ID.
+
+```bash
+openbroker twap-cancel --coin ETH --twap-id 77738308
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--coin` | Asset symbol | **required** |
+| `--twap-id` | TWAP order ID to cancel | **required** |
+
+#### `twap-status` — TWAP Order Status
+
+View TWAP order history and currently running TWAP orders.
+
+```bash
+openbroker twap-status              # All TWAP history
+openbroker twap-status --active     # Only running TWAPs
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--active` | Show only active/running TWAP orders | — |
 
 #### `scale` — Scale In/Out
 
@@ -724,7 +751,9 @@ When loaded, the plugin registers these agent tools:
 | Trading | `ob_trigger` | Trigger order (TP/SL) |
 | Trading | `ob_tpsl` | Set TP/SL on existing position |
 | Trading | `ob_cancel` | Cancel orders |
-| Advanced | `ob_twap` | TWAP execution |
+| Advanced | `ob_twap` | Native TWAP order (exchange-managed) |
+| Advanced | `ob_twap_cancel` | Cancel a running TWAP order |
+| Advanced | `ob_twap_status` | View TWAP order history/status |
 | Advanced | `ob_bracket` | Entry + TP + SL |
 | Advanced | `ob_chase` | Chase price with ALO orders |
 | Monitoring | `ob_watcher_status` | Background watcher state |

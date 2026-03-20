@@ -4,7 +4,7 @@ description: Hyperliquid trading plugin with background position monitoring and 
 license: MIT
 compatibility: Requires Node.js 22+, network access to api.hyperliquid.xyz
 homepage: https://www.npmjs.com/package/openbroker
-metadata: {"author": "monemetrics", "version": "1.0.71", "openclaw": {"requires": {"bins": ["openbroker"], "env": ["HYPERLIQUID_PRIVATE_KEY"]}, "primaryEnv": "HYPERLIQUID_PRIVATE_KEY", "install": [{"id": "node", "kind": "node", "package": "openbroker", "bins": ["openbroker"], "label": "Install openbroker (npm)"}]}}
+metadata: {"author": "monemetrics", "version": "1.0.72", "openclaw": {"requires": {"bins": ["openbroker"], "env": ["HYPERLIQUID_PRIVATE_KEY"]}, "primaryEnv": "HYPERLIQUID_PRIVATE_KEY", "install": [{"id": "node", "kind": "node", "package": "openbroker", "bins": ["openbroker"], "label": "Install openbroker (npm)"}]}}
 allowed-tools: ob_account ob_positions ob_funding ob_markets ob_search ob_spot ob_fills ob_orders ob_order_status ob_fees ob_candles ob_funding_history ob_trades ob_rate_limit ob_funding_scan ob_buy ob_sell ob_limit ob_trigger ob_tpsl ob_cancel ob_twap ob_twap_cancel ob_twap_status ob_bracket ob_chase ob_watcher_status ob_auto_run ob_auto_stop ob_auto_list Bash(openbroker:*)
 ---
 
@@ -436,15 +436,66 @@ The plugin reads wallet credentials from `~/.openbroker/.env` (set up by `openbr
 
 ### Webhook setup for watcher alerts
 
-For position alerts to reach the agent, enable hooks in your gateway config:
+For the position watcher and automations to send alerts to the agent, you must enable webhooks in your OpenClaw gateway config and add a hook mapping. This is a manual configuration step — plugins cannot auto-configure gateway settings.
 
-```yaml
-hooks:
-  enabled: true
-  token: "your-hooks-secret"   # Must match hooksToken above
+**1. Generate a hook token** — any secure random string:
+```bash
+openssl rand -hex 32
 ```
 
-Without hooks, the watcher still runs and tracks state (accessible via `ob_watcher_status`), but it can't wake the agent.
+**2. Enable hooks and add a mapping** in your `openclaw.json` (or `openclaw.yaml`) deployment config:
+```json
+"hooks": {
+  "enabled": true,
+  "path": "/hooks",
+  "token": "<your-generated-token>",
+  "allowedAgentIds": ["hooks", "main", "openbroker"],
+  "mappings": [
+    {
+      "id": "main",
+      "match": {
+        "path": "openbroker"
+      },
+      "action": "agent",
+      "wakeMode": "now",
+      "name": "Openbroker",
+      "agentId": "main",
+      "deliver": true,
+      "channel": "last",
+      "model": "anthropic/claude-sonnet-4-6"
+    }
+  ]
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `token` | Shared secret — must match `hooksToken` in the plugin config |
+| `allowedAgentIds` | Agent IDs allowed to receive webhook requests |
+| `mappings[].match.path` | Matches the webhook path sent by the plugin (always `"openbroker"`) |
+| `mappings[].wakeMode` | `"now"` triggers an immediate agent turn. `"next-heartbeat"` queues for the next scheduled heartbeat |
+| `mappings[].deliver` | If `true`, the agent's response is delivered to the user via the configured channel |
+| `mappings[].channel` | Delivery channel: `"last"` (most recent), `"slack"`, `"telegram"`, `"discord"`, `"whatsapp"`, etc. |
+| `mappings[].model` | Model override for webhook-triggered turns. Optional — uses deployment default if omitted |
+
+**3. Set the same token in your plugin config:**
+```yaml
+plugins:
+  entries:
+    openbroker:
+      enabled: true
+      config:
+        hooksToken: "<your-generated-token>"   # Same token as hooks.token
+        watcher:
+          enabled: true
+```
+
+**4. Restart the gateway** and verify:
+```bash
+openclaw ob status
+```
+
+The watcher sends alerts to `POST /hooks/agent` with `Authorization: Bearer <token>`. The gateway matches the request against the mapping and triggers an agent turn. Without hooks enabled, the watcher still tracks state (accessible via `ob_watcher_status`), but it can't wake the agent.
 
 ### Using with or without the plugin
 

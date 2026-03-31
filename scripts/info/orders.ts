@@ -13,6 +13,7 @@ Options:
   --status <status>   Filter by status (filled, canceled, open, triggered, rejected, etc.)
   --open              Show only currently open orders
   --top <n>           Show last N orders (default: 20)
+  --address <0x...>   Look up another account's orders
   --help, -h          Show this help
 
 Examples:
@@ -21,6 +22,7 @@ Examples:
   openbroker orders --open --coin ETH
   openbroker orders --coin ETH --status filled
   openbroker orders --top 50
+  openbroker orders --address 0xabc... --open
 `);
 }
 
@@ -37,12 +39,15 @@ async function main() {
   const openOnly = args.open as boolean;
   const top = parseInt(args.top as string) || 20;
   const jsonOutput = args.json as boolean;
+  const targetAddress = args.address as string | undefined;
   const client = getClient();
+
+  const lookupAddress = targetAddress?.toLowerCase();
 
   try {
     if (openOnly) {
       // Use the dedicated open orders endpoint
-      let openOrders = await client.getOpenOrders();
+      let openOrders = await client.getOpenOrders(lookupAddress);
 
       if (filterCoin) {
         openOrders = openOrders.filter(o => o.coin === normalizeCoin(filterCoin));
@@ -68,6 +73,10 @@ async function main() {
 
       console.log('Open Broker - Open Orders');
       console.log('=========================\n');
+
+      if (targetAddress) {
+        console.log(`Lookup: ${lookupAddress}\n`);
+      }
 
       if (openOrders.length === 0) {
         console.log('No open orders found');
@@ -106,7 +115,7 @@ async function main() {
       return;
     }
 
-    let orders = await client.getHistoricalOrders();
+    let orders = await client.getHistoricalOrders(lookupAddress);
 
     if (filterCoin) {
       orders = orders.filter(o => o.order.coin === normalizeCoin(filterCoin));
@@ -136,6 +145,10 @@ async function main() {
 
     console.log('Open Broker - Order History');
     console.log('==========================\n');
+
+    if (targetAddress) {
+      console.log(`Lookup: ${lookupAddress}\n`);
+    }
 
     if (orders.length === 0) {
       console.log('No orders found');

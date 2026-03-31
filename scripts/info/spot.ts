@@ -8,6 +8,7 @@ interface Args {
   balances?: boolean;
   top?: number;
   verbose?: boolean;
+  address?: string;
 }
 
 function parseArgs(): Args {
@@ -21,6 +22,8 @@ function parseArgs(): Args {
       args.balances = true;
     } else if (arg === '--top' && process.argv[i + 1]) {
       args.top = parseInt(process.argv[++i], 10);
+    } else if (arg === '--address' && process.argv[i + 1]) {
+      args.address = process.argv[++i].toLowerCase();
     } else if (arg === '--verbose') {
       args.verbose = true;
     } else if (arg === '--help' || arg === '-h') {
@@ -30,11 +33,12 @@ Spot Markets - View Hyperliquid spot markets and balances
 Usage: npx tsx scripts/info/spot.ts [options]
 
 Options:
-  --coin <symbol>  Filter by coin symbol
-  --balances       Show your spot token balances
-  --top <n>        Show only top N markets by volume
-  --verbose        Show detailed output
-  --help           Show this help
+  --coin <symbol>      Filter by coin symbol
+  --balances           Show your spot token balances
+  --address <0x...>    Look up another account's spot balances (with --balances)
+  --top <n>            Show only top N markets by volume
+  --verbose            Show detailed output
+  --help               Show this help
 
 Examples:
   npx tsx scripts/info/spot.ts                  # Show all spot markets
@@ -80,9 +84,10 @@ async function main() {
 
   // Show balances
   if (args.balances) {
-    console.log(`Fetching spot balances for ${client.address}...\n`);
+    const lookupAddress = args.address ?? client.address;
+    console.log(`Fetching spot balances for ${lookupAddress}...\n`);
 
-    const balances = await client.getSpotBalances();
+    const balances = await client.getSpotBalances(args.address);
 
     if (!balances.balances || balances.balances.length === 0) {
       console.log('No spot token balances found.');

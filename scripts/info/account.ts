@@ -7,16 +7,20 @@ import { formatUsd, formatPercent, parseArgs } from '../core/utils.js';
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const jsonOutput = args.json as boolean;
+  const targetAddress = args.address as string | undefined;
   const client = getClient();
 
   if (args.verbose) {
     client.verbose = true;
   }
 
-  const accountMode = await client.getAccountMode();
+  const lookupAddress = targetAddress?.toLowerCase() ?? client.address;
+  const isOtherAccount = !!targetAddress;
+
+  const accountMode = await client.getAccountMode(isOtherAccount ? lookupAddress : undefined);
 
   try {
-    const state = await client.getUserStateAll();
+    const state = await client.getUserStateAll(isOtherAccount ? lookupAddress : undefined);
 
     const margin = state.crossMarginSummary;
     const accountValue = parseFloat(margin.accountValue);
@@ -51,9 +55,11 @@ async function main() {
     // JSON output
     if (jsonOutput) {
       const result: Record<string, unknown> = {
-        address: client.address,
-        signingWallet: client.walletAddress,
-        walletType: client.isApiWallet ? 'api' : 'main',
+        address: lookupAddress,
+        ...(isOtherAccount ? {} : {
+          signingWallet: client.walletAddress,
+          walletType: client.isApiWallet ? 'api' : 'main',
+        }),
         accountMode,
         equity: accountValue,
         totalNotional,
@@ -65,7 +71,7 @@ async function main() {
       };
 
       if (args.orders) {
-        const orders = await client.getOpenOrders();
+        const orders = await client.getOpenOrders(isOtherAccount ? lookupAddress : undefined);
         result.openOrders = orders.map(o => ({
           coin: o.coin,
           oid: o.oid,
@@ -85,11 +91,17 @@ async function main() {
     console.log('Open Broker - Account Info');
     console.log('==========================\n');
 
-    console.log('Wallet Configuration');
-    console.log('--------------------');
-    console.log(`Trading Account:  ${client.address}`);
-    console.log(`Signing Wallet:   ${client.walletAddress}`);
-    console.log(`Wallet Type:      ${client.isApiWallet ? 'API Wallet' : 'Main Wallet'}`);
+    if (isOtherAccount) {
+      console.log('Lookup Address');
+      console.log('--------------------');
+      console.log(`Address:          ${lookupAddress}`);
+    } else {
+      console.log('Wallet Configuration');
+      console.log('--------------------');
+      console.log(`Trading Account:  ${client.address}`);
+      console.log(`Signing Wallet:   ${client.walletAddress}`);
+      console.log(`Wallet Type:      ${client.isApiWallet ? 'API Wallet' : 'Main Wallet'}`);
+    }
 
     const modeLabel: Record<string, string> = {
       standard: 'Standard (separate balances per dex)',
@@ -99,22 +111,24 @@ async function main() {
     };
     console.log(`Account Mode:     ${modeLabel[accountMode] ?? accountMode}`);
 
-    // Check builder fee approval
-    const builderApproval = await client.getMaxBuilderFee();
-    console.log(`Builder Address:  ${client.builderAddress}`);
-    console.log(`Builder Fee:      ${client.builderFeeBps} bps`);
-    if (builderApproval) {
-      console.log(`Builder Approved: ✅ Yes (max: ${builderApproval})`);
-    } else {
-      console.log(`Builder Approved: ❌ No`);
-      console.log(`\n⚠️  Run: npx tsx scripts/setup/approve-builder.ts`);
-    }
+    if (!isOtherAccount) {
+      // Check builder fee approval
+      const builderApproval = await client.getMaxBuilderFee();
+      console.log(`Builder Address:  ${client.builderAddress}`);
+      console.log(`Builder Fee:      ${client.builderFeeBps} bps`);
+      if (builderApproval) {
+        console.log(`Builder Approved: ✅ Yes (max: ${builderApproval})`);
+      } else {
+        console.log(`Builder Approved: ❌ No`);
+        console.log(`\n⚠️  Run: npx tsx scripts/setup/approve-builder.ts`);
+      }
 
-    // Warn if API wallet setup looks misconfigured
-    if (!client.isApiWallet && accountValue === 0 && positions.length === 0) {
-      console.log('\n⚠️  No positions and $0 equity.');
-      console.log('   If this account is traded via an API wallet, set HYPERLIQUID_ACCOUNT_ADDRESS');
-      console.log('   in ~/.openbroker/.env to the master account address (the wallet that holds funds).');
+      // Warn if API wallet setup looks misconfigured
+      if (!client.isApiWallet && accountValue === 0 && positions.length === 0) {
+        console.log('\n⚠️  No positions and $0 equity.');
+        console.log('   If this account is traded via an API wallet, set HYPERLIQUID_ACCOUNT_ADDRESS');
+        console.log('   in ~/.openbroker/.env to the master account address (the wallet that holds funds).');
+      }
     }
     console.log('');
 
@@ -157,7 +171,7 @@ async function main() {
       console.log('\nOpen Orders');
       console.log('-----------');
 
-      const orders = await client.getOpenOrders();
+      const orders = await client.getOpenOrders(isOtherAccount ? lookupAddress : undefined);
       if (orders.length === 0) {
         console.log('No open orders');
       } else {

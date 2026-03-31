@@ -8,17 +8,21 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   const filterCoin = args.coin as string | undefined;
   const jsonOutput = args.json as boolean;
+  const targetAddress = args.address as string | undefined;
   const client = getClient();
 
   if (args.verbose) {
     client.verbose = true;
   }
 
+  const lookupAddress = targetAddress?.toLowerCase();
+  const isOtherAccount = !!targetAddress;
+
   try {
     const [state, mids, fundingHistory] = await Promise.all([
-      client.getUserStateAll(),
+      client.getUserStateAll(lookupAddress),
       client.getAllMids(),
-      client.getUserFunding(),
+      client.getUserFunding(lookupAddress),
     ]);
 
     const positions = state.assetPositions.filter(ap => {
@@ -69,9 +73,13 @@ async function main() {
     console.log('Open Broker - Positions');
     console.log('=======================\n');
 
+    if (isOtherAccount) {
+      console.log(`Lookup: ${lookupAddress}\n`);
+    }
+
     if (positions.length === 0) {
       console.log(filterCoin ? `No position in ${filterCoin}` : 'No open positions');
-      if (!filterCoin && !client.isApiWallet) {
+      if (!filterCoin && !isOtherAccount && !client.isApiWallet) {
         console.log('\n⚠️  If this account is traded via an API wallet, set HYPERLIQUID_ACCOUNT_ADDRESS');
         console.log('   in ~/.openbroker/.env to the master account address.');
       }

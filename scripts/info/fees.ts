@@ -24,13 +24,19 @@ async function main() {
     process.exit(0);
   }
 
+  const targetAddress = args.address as string | undefined;
   const client = getClient();
+  const lookupAddress = targetAddress?.toLowerCase();
 
   console.log('Open Broker - Fee Schedule');
   console.log('=========================\n');
 
+  if (targetAddress) {
+    console.log(`Lookup: ${lookupAddress}\n`);
+  }
+
   try {
-    const fees = await client.getUserFees();
+    const fees = await client.getUserFees(lookupAddress);
 
     // Fee rates
     console.log('Fee Rates');

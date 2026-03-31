@@ -4,7 +4,7 @@ description: Hyperliquid trading plugin with background position monitoring and 
 license: MIT
 compatibility: Requires Node.js 22+, network access to api.hyperliquid.xyz
 homepage: https://www.npmjs.com/package/openbroker
-metadata: {"author": "monemetrics", "version": "1.0.72", "openclaw": {"requires": {"bins": ["openbroker"], "env": ["HYPERLIQUID_PRIVATE_KEY"]}, "primaryEnv": "HYPERLIQUID_PRIVATE_KEY", "install": [{"id": "node", "kind": "node", "package": "openbroker", "bins": ["openbroker"], "label": "Install openbroker (npm)"}]}}
+metadata: {"author": "monemetrics", "version": "1.0.73", "openclaw": {"requires": {"bins": ["openbroker"], "env": ["HYPERLIQUID_PRIVATE_KEY"]}, "primaryEnv": "HYPERLIQUID_PRIVATE_KEY", "install": [{"id": "node", "kind": "node", "package": "openbroker", "bins": ["openbroker"], "label": "Install openbroker (npm)"}]}}
 allowed-tools: ob_account ob_positions ob_funding ob_markets ob_search ob_spot ob_fills ob_orders ob_order_status ob_fees ob_candles ob_funding_history ob_trades ob_rate_limit ob_funding_scan ob_buy ob_sell ob_limit ob_trigger ob_tpsl ob_cancel ob_twap ob_twap_cancel ob_twap_status ob_bracket ob_chase ob_watcher_status ob_auto_run ob_auto_stop ob_auto_list Bash(openbroker:*)
 ---
 
@@ -127,8 +127,10 @@ HYPERLIQUID_NETWORK=mainnet
 ```bash
 openbroker account            # Balance, equity, margin
 openbroker account --orders   # Include open orders
+openbroker account --address 0xabc...  # Look up another account
 openbroker positions          # Open positions with PnL
 openbroker positions --coin ETH  # Specific coin
+openbroker positions --address 0xabc...  # Another account's positions
 ```
 
 ### Funding Rates
@@ -164,6 +166,7 @@ openbroker search --query ETH --type perp  # ETH perps only
 openbroker spot                   # Show all spot markets
 openbroker spot --coin PURR       # Show PURR market info
 openbroker spot --balances        # Show your spot balances
+openbroker spot --balances --address 0xabc...  # Another account's spot balances
 openbroker spot --top 20          # Top 20 by volume
 ```
 
@@ -172,6 +175,7 @@ openbroker spot --top 20          # Top 20 by volume
 openbroker fills                          # Recent fills
 openbroker fills --coin ETH               # ETH fills only
 openbroker fills --coin BTC --side buy --top 50
+openbroker fills --address 0xabc...       # Another account's fills
 ```
 
 ### Order History
@@ -181,17 +185,20 @@ openbroker orders --open                  # Currently open orders only
 openbroker orders --open --coin ETH       # Open orders for a specific coin
 openbroker orders --coin ETH --status filled
 openbroker orders --top 50
+openbroker orders --address 0xabc... --open  # Another account's open orders
 ```
 
 ### Order Status
 ```bash
 openbroker order-status --oid 123456789   # Check specific order
 openbroker order-status --oid 0x1234...   # By client order ID
+openbroker order-status --oid 123456789 --address 0xabc...  # On another account
 ```
 
 ### Fee Schedule
 ```bash
 openbroker fees                           # Fee tier, rates, and volume
+openbroker fees --address 0xabc...        # Another account's fees
 ```
 
 ### Candle Data (OHLCV)

@@ -9,15 +9,17 @@ function printUsage() {
 Usage: openbroker fills [options]
 
 Options:
-  --coin <symbol>   Filter by coin (e.g. ETH, BTC)
-  --side <buy|sell>  Filter by side
-  --top <n>         Show last N fills (default: 20)
-  --help, -h        Show this help
+  --coin <symbol>      Filter by coin (e.g. ETH, BTC)
+  --side <buy|sell>    Filter by side
+  --top <n>            Show last N fills (default: 20)
+  --address <0x...>    Look up another account's fills
+  --help, -h           Show this help
 
 Examples:
   openbroker fills
   openbroker fills --coin ETH
   openbroker fills --coin BTC --side buy --top 50
+  openbroker fills --address 0xabc... --coin ETH
 `);
 }
 
@@ -33,10 +35,13 @@ async function main() {
   const filterSide = args.side as string | undefined;
   const top = parseInt(args.top as string) || 20;
   const jsonOutput = args.json as boolean;
+  const targetAddress = args.address as string | undefined;
   const client = getClient();
 
+  const lookupAddress = targetAddress?.toLowerCase();
+
   try {
-    let fills = await client.getUserFills();
+    let fills = await client.getUserFills(lookupAddress);
 
     if (filterCoin) {
       fills = fills.filter(f => f.coin === normalizeCoin(filterCoin));
@@ -65,6 +70,10 @@ async function main() {
 
     console.log('Open Broker - Trade Fills');
     console.log('========================\n');
+
+    if (targetAddress) {
+      console.log(`Lookup: ${lookupAddress}\n`);
+    }
 
     if (fills.length === 0) {
       console.log('No fills found');

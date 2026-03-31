@@ -9,12 +9,14 @@ function printUsage() {
 Usage: openbroker order-status --oid <order-id>
 
 Options:
-  --oid <id>    Order ID (number) or client order ID (hex string) — required
-  --help, -h    Show this help
+  --oid <id>          Order ID (number) or client order ID (hex string) — required
+  --address <0x...>   Look up order on another account
+  --help, -h          Show this help
 
 Examples:
   openbroker order-status --oid 123456789
   openbroker order-status --oid 0x1234abcd...
+  openbroker order-status --oid 123456789 --address 0xabc...
 `);
 }
 
@@ -34,13 +36,15 @@ async function main() {
   }
 
   const oid = oidArg.startsWith('0x') ? oidArg : parseInt(oidArg);
+  const targetAddress = args.address as string | undefined;
   const client = getClient();
+  const lookupAddress = targetAddress?.toLowerCase();
 
   console.log('Open Broker - Order Status');
   console.log('=========================\n');
 
   try {
-    const result = await client.getOrderStatus(oid);
+    const result = await client.getOrderStatus(oid, lookupAddress);
 
     if (result.status === 'unknownOid') {
       console.log(`Order ${oidArg} not found`);

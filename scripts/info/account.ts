@@ -52,6 +52,11 @@ async function main() {
 
     const totalPnl = positions.reduce((sum, p) => sum + p.unrealizedPnl, 0);
 
+    // Fetch spot balances
+    const userParam = isOtherAccount ? lookupAddress : undefined;
+    const spotState = await client.getSpotBalances(userParam);
+    const spotBalances = (spotState?.balances ?? []).filter(b => parseFloat(b.total) > 0);
+
     // JSON output
     if (jsonOutput) {
       const result: Record<string, unknown> = {
@@ -68,6 +73,12 @@ async function main() {
         marginRatio: totalMarginUsed > 0 && accountValue > 0 ? totalMarginUsed / accountValue : 0,
         totalUnrealizedPnl: totalPnl,
         positions,
+        spotBalances: spotBalances.map(b => ({
+          coin: b.coin,
+          total: b.total,
+          hold: b.hold,
+          entryNtl: b.entryNtl,
+        })),
       };
 
       if (args.orders) {
@@ -164,6 +175,23 @@ async function main() {
 
       console.log('---------|------------|------------|------------|------------|----------');
       console.log(`Total Unrealized PnL: ${formatUsd(totalPnl)}`);
+    }
+
+    // Show spot balances
+    if (spotBalances.length > 0) {
+      console.log('\nSpot Balances');
+      console.log('-------------');
+      console.log('Token        | Total              | Hold               | Entry Value');
+      console.log('-------------|--------------------|--------------------|------------');
+
+      for (const b of spotBalances) {
+        const total = parseFloat(b.total);
+        const hold = parseFloat(b.hold);
+        const entry = parseFloat(b.entryNtl);
+        console.log(
+          `${b.coin.padEnd(12)} | ${total.toFixed(6).padStart(18)} | ${hold.toFixed(6).padStart(18)} | ${formatUsd(entry)}`
+        );
+      }
     }
 
     // Show open orders if requested

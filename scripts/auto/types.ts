@@ -33,7 +33,9 @@ export type AutomationEventType =
   | 'position_changed'
   | 'pnl_threshold'
   | 'margin_warning'
-  | 'order_filled';
+  | 'order_filled'
+  | 'order_update'
+  | 'liquidation';
 
 export interface AutomationEventPayloads {
   tick: { timestamp: number; pollCount: number };
@@ -45,6 +47,25 @@ export interface AutomationEventPayloads {
   pnl_threshold: { coin: string; unrealizedPnl: number; changePct: number; positionValue: number };
   margin_warning: { marginUsedPct: number; equity: number; marginUsed: number };
   order_filled: { coin: string; oid: number; side: 'buy' | 'sell'; size: number; price: number };
+  /** Real-time order lifecycle event via WebSocket (filled, canceled, rejected, triggered, etc.) */
+  order_update: {
+    coin: string;
+    oid: number;
+    side: 'buy' | 'sell';
+    size: number;
+    price: number;
+    origSize: number;
+    status: string;
+    statusTimestamp: number;
+  };
+  /** Liquidation event via WebSocket — only source for liquidation alerts */
+  liquidation: {
+    lid: number;
+    liquidator: string;
+    liquidatedUser: string;
+    liquidatedNtlPos: number;
+    liquidatedAccountValue: number;
+  };
 }
 
 export type AutomationEventHandler<E extends AutomationEventType> =

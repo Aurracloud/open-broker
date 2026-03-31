@@ -4,7 +4,7 @@ description: Hyperliquid trading plugin with background position monitoring and 
 license: MIT
 compatibility: Requires Node.js 22+, network access to api.hyperliquid.xyz
 homepage: https://www.npmjs.com/package/openbroker
-metadata: {"author": "monemetrics", "version": "1.0.74", "openclaw": {"requires": {"bins": ["openbroker"], "env": ["HYPERLIQUID_PRIVATE_KEY"]}, "primaryEnv": "HYPERLIQUID_PRIVATE_KEY", "install": [{"id": "node", "kind": "node", "package": "openbroker", "bins": ["openbroker"], "label": "Install openbroker (npm)"}]}}
+metadata: {"author": "monemetrics", "version": "1.0.75", "openclaw": {"requires": {"bins": ["openbroker"], "env": ["HYPERLIQUID_PRIVATE_KEY"]}, "primaryEnv": "HYPERLIQUID_PRIVATE_KEY", "install": [{"id": "node", "kind": "node", "package": "openbroker", "bins": ["openbroker"], "label": "Install openbroker (npm)"}]}}
 allowed-tools: ob_account ob_positions ob_funding ob_markets ob_search ob_spot ob_fills ob_orders ob_order_status ob_fees ob_candles ob_funding_history ob_trades ob_rate_limit ob_funding_scan ob_buy ob_sell ob_limit ob_trigger ob_tpsl ob_cancel ob_twap ob_twap_cancel ob_twap_status ob_bracket ob_chase ob_watcher_status ob_auto_run ob_auto_stop ob_auto_list Bash(openbroker:*)
 ---
 
@@ -528,11 +528,11 @@ To view bundled examples and their config schemas:
 openbroker auto examples    # List examples with config fields
 ```
 
-Available examples: `dca`, `grid`, `funding-arb`, `mm-spread`, `mm-maker`
+Available examples: `dca`, `grid`, `funding-arb`, `mm-spread`, `mm-maker`, `price-alert`
 
 ### How Automations Work
 
-An automation is a `.ts` file that exports a default function. The function receives an `AutomationAPI` with the full Hyperliquid client, typed event subscriptions, persistent state, and a logger. The runtime polls Hyperliquid every 10s (configurable) and dispatches events when changes are detected.
+An automation is a `.ts` file that exports a default function. The function receives an `AutomationAPI` with the full Hyperliquid client, typed event subscriptions, persistent state, and a logger. The runtime connects a WebSocket for real-time price and order events, with REST polling every 30s as a heartbeat for position/margin data. Use `--no-ws` to disable WebSocket and fall back to pure REST polling (every 10s).
 
 ### Writing an Automation
 
@@ -780,18 +780,66 @@ api.on('margin_warning', async ({ marginUsedPct, equity }) => {
 });
 ```
 
+#### `order_update` — Real-time order lifecycle (WebSocket)
+Fires instantly when any order changes status: `open`, `filled`, `canceled`, `triggered`, `rejected`, `marginCanceled`, `liquidatedCanceled`, `badAloPxRejected`, and 20+ other statuses. Requires WebSocket (enabled by default).
+
+**Payload:** `{ coin: string, oid: number, side: 'buy' | 'sell', size: number, price: number, origSize: number, status: string, statusTimestamp: number }`
+
+**Example:**
+```typescript
+api.on('order_update', async ({ coin, oid, status, side, size, price }) => {
+  if (status === 'filled') {
+    api.log.info(`Order ${oid} filled: ${side} ${size} ${coin} @ $${price}`);
+  } else if (status === 'canceled' || status.includes('Rejected')) {
+    api.log.warn(`Order ${oid} ${status}: ${coin}`);
+  }
+});
+```
+
+#### `liquidation` — Liquidation alert (WebSocket only)
+Fires when the account is liquidated. This event is **only available via WebSocket** — there is no REST polling equivalent.
+
+**Payload:** `{ lid: number, liquidator: string, liquidatedUser: string, liquidatedNtlPos: number, liquidatedAccountValue: number }`
+
+**Example:**
+```typescript
+api.on('liquidation', async ({ liquidatedNtlPos, liquidatedAccountValue }) => {
+  await api.publish(
+    `LIQUIDATED: $${liquidatedNtlPos.toFixed(2)} notional, account value: $${liquidatedAccountValue.toFixed(2)}`,
+    { name: 'liquidation-alert' },
+  );
+});
+```
+
+### WebSocket Real-Time Data
+
+Automations use **WebSocket by default** for real-time market and account events. The runtime subscribes to:
+- **allMids** — price updates for all assets (drives `price_change` events in real-time)
+- **orderUpdates** — order lifecycle events (drives `order_update` and `order_filled`)
+- **userFills** — trade fill details with PnL and fees
+- **userEvents** — liquidation alerts, funding payments, system cancellations
+
+REST polling continues as a **heartbeat** (every 60s by default) for position/margin/funding events that aren't covered by WebSocket. If the WebSocket connection fails, the runtime falls back to full REST polling (every 10s) automatically.
+
+To disable WebSocket (pure REST polling):
+```bash
+openbroker auto run my-strategy.ts --no-ws
+```
+
 ### Choosing the Right Event — Quick Guide
 
 | Use case | Best event | Why |
 |----------|-----------|-----|
 | Alert when price crosses a fixed level | `tick` | Fires every poll — no minimum change threshold |
-| React to price momentum/volatility | `price_change` | Provides relative change data between polls |
+| React to price momentum/volatility | `price_change` | Real-time via WebSocket, provides relative change data |
 | Funding rate strategy | `funding_update` | Gives annualized rate directly |
 | Auto TP/SL on new positions | `position_opened` | Fires exactly when a new position appears |
 | Log when positions close | `position_closed` | Fires when position disappears |
 | Track position scaling | `position_changed` | Fires on size changes only |
 | Risk management — PnL spikes | `pnl_threshold` | Only fires on large moves (≥5% of position value) |
 | Risk management — margin | `margin_warning` | Fires at 80%+ margin usage |
+| React instantly to order fills/rejects | `order_update` | Real-time via WebSocket — sub-second latency |
+| Liquidation alerts | `liquidation` | WebSocket only — no REST equivalent |
 | Periodic task (DCA, rebalance) | `api.every(ms, fn)` | Better than tick for longer intervals |
 
 ### Client Methods Available

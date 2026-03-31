@@ -1,4 +1,5 @@
 // Automation Runtime — loads scripts, polls market data, dispatches events
+// Supports real-time WebSocket feeds with REST polling as fallback heartbeat
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import path from 'path';
@@ -9,6 +10,7 @@ import {
   roundPrice, roundSize, sleep, normalizeCoin,
   formatUsd, formatPercent, annualizeFundingRate,
 } from '../core/utils.js';
+import { WebSocketManager } from '../core/ws.js';
 import { AutomationEventBus } from './events.js';
 import { loadAutomation } from './loader.js';
 import { registerAutomation, unregisterAutomation, markAutomationError, getRegisteredAutomations as getRegisteredFromFile } from './registry.js';
@@ -233,6 +235,13 @@ export interface RuntimeOptions {
   hooksToken?: string;
   /** Pre-seed state before the factory function runs (e.g. from --set key=value) */
   initialState?: Record<string, unknown>;
+  /**
+   * Enable WebSocket for real-time events (allMids, orderUpdates, userFills, userEvents).
+   * When enabled, REST polling interval is relaxed to a heartbeat (default 60s).
+   * Falls back gracefully to polling if WebSocket connection fails.
+   * @default true
+   */
+  useWebSocket?: boolean;
 }
 
 /** Registry of all running automations */
@@ -254,11 +263,15 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
     scriptPath,
     dryRun = false,
     verbose = false,
-    pollIntervalMs = 10_000,
     gatewayPort,
     hooksToken,
     initialState,
+    useWebSocket = true,
   } = options;
+
+  // When WebSocket is enabled, REST poll becomes a heartbeat (30s default)
+  // When disabled, use the original 10s polling interval
+  const pollIntervalMs = options.pollIntervalMs ?? (useWebSocket ? 30_000 : 10_000);
 
   const id = options.id || path.basename(scriptPath, '.ts');
 
@@ -317,7 +330,7 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
     }
   }
 
-  // Polling state
+  // Polling state (declared early so WebSocket handlers can reference)
   let previousSnapshot: AutomationSnapshot | null = null;
   let pollCount = 0;
   let eventsEmitted = 0;
@@ -330,6 +343,110 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
       for (const hook of errorHooks) {
         try { await hook(err); } catch { /* swallow */ }
       }
+    }
+  }
+
+  // ── WebSocket setup ─────────────────────────────────────────────
+  let ws: WebSocketManager | null = null;
+  let wsConnected = false;
+  // Track latest prices from WebSocket for real-time price_change events
+  let wsPrices = new Map<string, number>();
+
+  if (useWebSocket) {
+    try {
+      ws = new WebSocketManager(verbose);
+
+      // Wire WebSocket events to the automation event bus
+      ws.on('allMids', ({ mids }) => {
+        const now = Date.now();
+        for (const [coin, mid] of Object.entries(mids)) {
+          const newPrice = parseFloat(mid);
+          if (isNaN(newPrice) || newPrice === 0) continue;
+          const oldPrice = wsPrices.get(coin);
+          wsPrices.set(coin, newPrice);
+
+          if (oldPrice !== undefined && oldPrice !== 0 && eventBus.has('price_change')) {
+            const changePct = ((newPrice - oldPrice) / oldPrice) * 100;
+            if (Math.abs(changePct) >= 0.01) {
+              eventBus.emit('price_change', { coin, oldPrice, newPrice, changePct })
+                .then(errors => { if (errors.length) handleErrors(errors); });
+              eventsEmitted++;
+            }
+          }
+        }
+      });
+
+      ws.on('orderUpdate', (update) => {
+        if (eventBus.has('order_update')) {
+          eventBus.emit('order_update', {
+            coin: update.order.coin,
+            oid: update.order.oid,
+            side: update.order.side === 'B' ? 'buy' : 'sell',
+            size: parseFloat(update.order.sz),
+            price: parseFloat(update.order.limitPx),
+            origSize: parseFloat(update.order.origSz),
+            status: update.status,
+            statusTimestamp: update.statusTimestamp,
+          }).then(errors => { if (errors.length) handleErrors(errors); });
+          eventsEmitted++;
+        }
+
+        // Also emit order_filled for backward compatibility
+        if (update.status === 'filled' && eventBus.has('order_filled')) {
+          eventBus.emit('order_filled', {
+            coin: update.order.coin,
+            oid: update.order.oid,
+            side: update.order.side === 'B' ? 'buy' : 'sell',
+            size: parseFloat(update.order.sz),
+            price: parseFloat(update.order.limitPx),
+          }).then(errors => { if (errors.length) handleErrors(errors); });
+          eventsEmitted++;
+        }
+      });
+
+      ws.on('userFill', (fill) => {
+        // userFill events are already covered by order_update with status=filled
+        // But this provides the realized PnL and fee data that order_update doesn't have
+        log.debug(`Fill: ${fill.side === 'B' ? 'BUY' : 'SELL'} ${fill.sz} ${fill.coin} @ ${fill.px} (PnL: ${fill.closedPnl})`);
+      });
+
+      ws.on('userEvent', (event) => {
+        // Handle liquidation events — only available through WebSocket
+        if ('liquidation' in event && eventBus.has('liquidation')) {
+          const liq = event.liquidation;
+          eventBus.emit('liquidation', {
+            lid: liq.lid,
+            liquidator: liq.liquidator,
+            liquidatedUser: liq.liquidated_user,
+            liquidatedNtlPos: parseFloat(liq.liquidated_ntl_pos),
+            liquidatedAccountValue: parseFloat(liq.liquidated_account_value),
+          }).then(errors => { if (errors.length) handleErrors(errors); });
+          eventsEmitted++;
+        }
+      });
+
+      ws.on('error', ({ error }) => {
+        log.warn(`WebSocket error: ${error.message}`);
+      });
+
+      ws.on('disconnected', () => {
+        wsConnected = false;
+        log.warn('WebSocket disconnected — falling back to REST polling');
+      });
+
+      ws.on('connected', () => {
+        wsConnected = true;
+        log.info('WebSocket connected — real-time events active');
+      });
+
+      // Connect and subscribe
+      const userAddress = rawClient.address as `0x${string}`;
+      await ws.subscribeAll(userAddress);
+      log.info('WebSocket subscriptions active (allMids, orderUpdates, userFills, userEvents)');
+    } catch (err) {
+      log.warn(`WebSocket setup failed: ${err instanceof Error ? err.message : String(err)} — using REST polling only`);
+      ws = null;
+      wsConnected = false;
     }
   }
 
@@ -348,8 +465,8 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
       eventsEmitted++;
 
       if (previousSnapshot) {
-        // Price changes
-        if (eventBus.has('price_change')) {
+        // Price changes (skip when WebSocket is handling real-time prices)
+        if (eventBus.has('price_change') && !wsConnected) {
           for (const [coin, newPrice] of snapshot.prices) {
             const oldPrice = previousSnapshot.prices.get(coin);
             if (oldPrice === undefined || oldPrice === 0) continue;
@@ -485,7 +602,8 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
   }
 
   // Start polling
-  log.info(`Started (poll every ${pollIntervalMs / 1000}s, dry=${dryRun})`);
+  const wsLabel = wsConnected ? ', ws=on' : (useWebSocket ? ', ws=failed' : '');
+  log.info(`Started (poll every ${pollIntervalMs / 1000}s, dry=${dryRun}${wsLabel})`);
   const timer = setInterval(poll, pollIntervalMs);
 
   // Initial poll to seed state
@@ -496,6 +614,13 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
     if (stopped) return;
     stopped = true;
     clearInterval(timer);
+
+    // Close WebSocket
+    if (ws) {
+      ws.removeAllListeners();
+      await ws.close();
+      ws = null;
+    }
 
     for (const hook of stopHooks) {
       try { await hook(); } catch (err) {

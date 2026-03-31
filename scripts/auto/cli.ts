@@ -104,10 +104,11 @@ async function runCommand(args: Record<string, string | boolean>, positional: st
   const scriptPath = exampleName ? resolveExamplePath(exampleName) : resolveScriptPath(scriptName!);
   const dryRun = args.dry === true;
   const verbose = args.verbose === true;
-  const pollIntervalMs = args.poll ? parseInt(String(args.poll), 10) : 10_000;
+  const useWebSocket = args['no-ws'] !== true;
+  const pollIntervalMs = args.poll ? parseInt(String(args.poll), 10) : undefined;
   const id = args.id ? String(args.id) : undefined;
 
-  if (isNaN(pollIntervalMs) || pollIntervalMs < 1000) {
+  if (pollIntervalMs !== undefined && (isNaN(pollIntervalMs) || pollIntervalMs < 1000)) {
     console.error('Error: --poll must be at least 1000ms');
     process.exit(1);
   }
@@ -118,6 +119,7 @@ async function runCommand(args: Record<string, string | boolean>, positional: st
     dryRun,
     verbose,
     pollIntervalMs,
+    useWebSocket,
     initialState: Object.keys(initialState).length > 0 ? initialState : undefined,
   });
 

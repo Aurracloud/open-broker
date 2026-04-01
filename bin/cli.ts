@@ -47,6 +47,9 @@ const commands: Record<string, { script: string; description: string }> = {
   'scale': { script: 'operations/scale.ts', description: 'Scale in/out orders' },
   'bracket': { script: 'operations/bracket.ts', description: 'Bracket order (entry + TP + SL)' },
   'chase': { script: 'operations/chase.ts', description: 'Chase order with ALO' },
+  'spot-buy': { script: 'operations/spot-order.ts', description: 'Spot buy order' },
+  'spot-sell': { script: 'operations/spot-order.ts', description: 'Spot sell order' },
+  'spot-order': { script: 'operations/spot-order.ts', description: 'Spot order (market or limit)' },
 
   // Automations
   'auto': { script: 'auto/cli.ts', description: 'Run/manage trading automations' },
@@ -87,6 +90,11 @@ Trading Commands:
   trigger              Trigger order (stop loss / take profit)
   tpsl                 Set TP/SL on existing position
   cancel               Cancel orders
+
+Spot Trading:
+  spot-buy             Spot buy order
+  spot-sell            Spot sell order
+  spot-order           Spot order (market or limit, specify --side)
 
 Advanced Execution:
   twap                 Native TWAP order (exchange-managed)
@@ -165,6 +173,14 @@ function main() {
   }
   if (command === 'sell') {
     runScript(commands['market'].script, ['--side', 'sell', ...commandArgs]);
+    return;
+  }
+  if (command === 'spot-buy') {
+    runScript(commands['spot-order'].script, ['--side', 'buy', ...commandArgs]);
+    return;
+  }
+  if (command === 'spot-sell') {
+    runScript(commands['spot-order'].script, ['--side', 'sell', ...commandArgs]);
     return;
   }
 

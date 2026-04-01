@@ -37,6 +37,12 @@ export class HyperliquidClient {
   private hip3MaxLeverageMap: Map<string, number> = new Map();
   /** Cached account abstraction mode: 'standard' | 'unified' | 'portfolio' | 'dexAbstraction' */
   private accountMode: string | null = null;
+  /** Spot asset index map: coin name → 10000 + spotMeta.universe[i].index */
+  private spotAssetMap: Map<string, number> = new Map();
+  /** Spot szDecimals map: coin name → base token szDecimals */
+  private spotSzDecimalsMap: Map<string, number> = new Map();
+  /** Whether spot metadata has been loaded */
+  private spotMetaLoaded: boolean = false;
   public verbose: boolean = false;
 
   constructor(config?: OpenBrokerConfig) {
@@ -410,6 +416,59 @@ export class HyperliquidClient {
       meta: data[0],
       assetCtxs: data[1],
     };
+  }
+
+  /**
+   * Load spot metadata into lookup maps.
+   * Spot asset index for orders = 10000 + universe[i].index
+   * Uses the base token's szDecimals for size rounding.
+   */
+  private async loadSpotMeta(): Promise<void> {
+    if (this.spotMetaLoaded) return;
+
+    try {
+      const spotData = await this.getSpotMeta();
+      // Build token lookup for szDecimals
+      const tokenMap = new Map<number, { name: string; szDecimals: number }>();
+      for (const token of spotData.tokens) {
+        tokenMap.set(token.index, { name: token.name, szDecimals: token.szDecimals });
+      }
+
+      for (const pair of spotData.universe) {
+        // pair.name is the market name (e.g., "PURR/USDC", "@1")
+        // pair.tokens = [baseTokenIndex, quoteTokenIndex]
+        // pair.index is the spot universe index
+        const baseToken = tokenMap.get(pair.tokens[0]);
+        if (!baseToken) continue;
+
+        const spotAssetIndex = 10000 + pair.index;
+        // Key by base token name for user-facing lookups (e.g., "PURR" not "PURR/USDC")
+        this.spotAssetMap.set(baseToken.name, spotAssetIndex);
+        this.spotSzDecimalsMap.set(baseToken.name, baseToken.szDecimals);
+
+        this.log(`Spot: ${baseToken.name} → asset ${spotAssetIndex} (szDecimals: ${baseToken.szDecimals})`);
+      }
+
+      this.spotMetaLoaded = true;
+      this.log(`Loaded ${this.spotAssetMap.size} spot markets`);
+    } catch (e) {
+      this.log('Failed to load spot metadata:', e);
+    }
+  }
+
+  /** Get the spot asset index for a coin, or undefined if not a spot asset */
+  getSpotAssetIndex(coin: string): number | undefined {
+    return this.spotAssetMap.get(coin);
+  }
+
+  /** Get spot szDecimals for a coin */
+  getSpotSzDecimals(coin: string): number | undefined {
+    return this.spotSzDecimalsMap.get(coin);
+  }
+
+  /** Get all loaded spot asset names */
+  getSpotAssetNames(): string[] {
+    return Array.from(this.spotAssetMap.keys());
   }
 
   /**
@@ -1596,6 +1655,188 @@ export class HyperliquidClient {
     }
 
     return results;
+  }
+
+  // ============ Spot Trading ============
+
+  /**
+   * Place a spot order.
+   * Uses the same exchange.order() endpoint but with spot asset indices (10000 + spotIndex).
+   * Spot orders have no leverage, no reduce-only, and builder fee max is 1000 (vs 100 for perps).
+   *
+   * @param coin - Base token symbol (e.g. "PURR", "HYPE")
+   * @param isBuy - True to buy base token, false to sell
+   * @param size - Size in base token units
+   * @param price - Limit price in quote token (usually USDC)
+   * @param orderType - Order type with time-in-force
+   * @param includeBuilder - Whether to include builder fee (default: true)
+   */
+  async spotOrder(
+    coin: string,
+    isBuy: boolean,
+    size: number,
+    price: number,
+    orderType: { limit: { tif: 'Gtc' | 'Ioc' | 'Alo' } },
+    includeBuilder: boolean = true,
+  ): Promise<OrderResponse> {
+    this.requireTrading();
+    await this.loadSpotMeta();
+
+    const assetIndex = this.spotAssetMap.get(coin);
+    if (assetIndex === undefined) {
+      throw new Error(
+        `Unknown spot asset: ${coin}. Available: ${Array.from(this.spotAssetMap.keys()).slice(0, 15).join(', ')}...\n` +
+        `Use "openbroker spot" to see all spot markets.`
+      );
+    }
+
+    const szDecimals = this.spotSzDecimalsMap.get(coin)!;
+
+    const orderWire = {
+      a: assetIndex,
+      b: isBuy,
+      p: roundPrice(price, szDecimals, true),
+      s: roundSize(size, szDecimals),
+      r: false, // reduce-only not applicable for spot
+      t: orderType,
+    };
+
+    this.log('Placing spot order:', JSON.stringify(orderWire, null, 2));
+
+    const orderRequest: {
+      orders: typeof orderWire[];
+      grouping: 'na';
+      builder?: BuilderInfo;
+    } = {
+      orders: [orderWire],
+      grouping: 'na',
+    };
+
+    // Add builder fee if configured (spot max is 1000 vs 100 for perps)
+    if (includeBuilder && this.config.builderAddress !== '0x0000000000000000000000000000000000000000') {
+      orderRequest.builder = this.builderInfo;
+      this.log('Including builder fee:', this.builderInfo);
+    }
+
+    try {
+      const response = await this.exchange.order(orderRequest);
+      this.log('Spot order response:', JSON.stringify(response, null, 2));
+      return response as unknown as OrderResponse;
+    } catch (error) {
+      this.log('Spot order error:', error);
+      return {
+        status: 'err',
+        response: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  /**
+   * Place a spot market order (IOC at slippage price).
+   * @param coin - Base token symbol (e.g. "PURR", "HYPE")
+   * @param isBuy - True to buy, false to sell
+   * @param size - Size in base token units
+   * @param slippageBps - Slippage tolerance in basis points (default: config value)
+   */
+  async spotMarketOrder(
+    coin: string,
+    isBuy: boolean,
+    size: number,
+    slippageBps?: number,
+  ): Promise<OrderResponse> {
+    await this.loadSpotMeta();
+
+    // Get current mid price for the spot pair
+    const spotData = await this.getSpotMetaAndAssetCtxs();
+    let midPrice: number | null = null;
+
+    // Find the spot pair matching this coin
+    for (let i = 0; i < spotData.meta.universe.length; i++) {
+      const pair = spotData.meta.universe[i];
+      const ctx = spotData.assetCtxs[i];
+      if (!pair || !ctx) continue;
+
+      // Match by base token name
+      const baseTokenIdx = pair.tokens[0];
+      const baseToken = spotData.meta.tokens.find(t => t.index === baseTokenIdx);
+      if (baseToken && baseToken.name === coin) {
+        midPrice = parseFloat(ctx.midPx);
+        break;
+      }
+    }
+
+    if (!midPrice || midPrice === 0) {
+      throw new Error(`No spot price for ${coin}. Check if the spot market exists with "openbroker spot --coin ${coin}".`);
+    }
+
+    // Calculate slippage price
+    const slippage = (slippageBps ?? this.config.slippageBps) / 10000;
+    const limitPrice = isBuy
+      ? midPrice * (1 + slippage)
+      : midPrice * (1 - slippage);
+
+    this.log(`Spot market order: ${coin} ${isBuy ? 'BUY' : 'SELL'} ${size} @ ${limitPrice} (mid: ${midPrice}, slippage: ${slippage * 100}%)`);
+
+    return this.spotOrder(
+      coin,
+      isBuy,
+      size,
+      limitPrice,
+      { limit: { tif: 'Ioc' } },
+    );
+  }
+
+  /**
+   * Place a spot limit order.
+   * @param coin - Base token symbol (e.g. "PURR", "HYPE")
+   * @param isBuy - True to buy, false to sell
+   * @param size - Size in base token units
+   * @param price - Limit price in quote token (usually USDC)
+   * @param tif - Time-in-force (default: Gtc)
+   */
+  async spotLimitOrder(
+    coin: string,
+    isBuy: boolean,
+    size: number,
+    price: number,
+    tif: 'Gtc' | 'Ioc' | 'Alo' = 'Gtc',
+  ): Promise<OrderResponse> {
+    return this.spotOrder(
+      coin,
+      isBuy,
+      size,
+      price,
+      { limit: { tif } },
+    );
+  }
+
+  /**
+   * Cancel a spot order by coin and order ID.
+   */
+  async spotCancel(coin: string, oid: number): Promise<CancelResponse> {
+    this.requireTrading();
+    await this.loadSpotMeta();
+
+    const assetIndex = this.spotAssetMap.get(coin);
+    if (assetIndex === undefined) {
+      throw new Error(`Unknown spot asset: ${coin}`);
+    }
+
+    this.log(`Cancelling spot order: ${coin} (asset ${assetIndex}) oid ${oid}`);
+
+    try {
+      const response = await this.exchange.cancel({
+        cancels: [{ a: assetIndex, o: oid }],
+      });
+      this.log('Spot cancel response:', JSON.stringify(response, null, 2));
+      return response as unknown as CancelResponse;
+    } catch (error) {
+      this.log('Spot cancel error:', error);
+      return {
+        status: 'err',
+        response: { type: 'cancel', data: { statuses: [error instanceof Error ? error.message : String(error)] } },
+      };
+    }
   }
 
   // ============ Leverage ============

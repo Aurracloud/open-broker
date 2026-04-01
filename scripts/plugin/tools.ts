@@ -1194,6 +1194,127 @@ export function createTools(watcherOrCtx: PositionWatcher | null | ToolsContext)
     },
 
     {
+      name: 'ob_spot_buy',
+      description: 'Buy spot tokens on Hyperliquid. Always use dry=true first to preview.',
+      parameters: {
+        type: 'object',
+        properties: {
+          coin: { type: 'string', description: 'Base token symbol (PURR, HYPE, etc.)' },
+          size: { type: 'number', description: 'Order size in base token units' },
+          price: { type: 'number', description: 'Limit price (omit for market order)' },
+          tif: { type: 'string', description: 'Time-in-force for limit: Gtc, Ioc, Alo (default: Gtc)' },
+          slippage: { type: 'number', description: 'Slippage tolerance in bps for market orders (default: 50)' },
+          dry: { type: 'boolean', description: 'Preview without executing' },
+        },
+        required: ['coin', 'size'],
+      },
+      async execute(_id, params) {
+        const { getClient } = await import('../core/client.js');
+        const { formatUsd } = await import('../core/utils.js');
+        const client = getClient();
+
+        if (client.isReadOnly) return error('Wallet not configured. Run "openbroker setup" first.');
+
+        const coin = (params.coin as string).toUpperCase();
+        const size = params.size as number;
+        const price = params.price as number | undefined;
+        const isMarket = price === undefined;
+
+        if (params.dry) {
+          // Get spot price for preview
+          const spotData = await client.getSpotMetaAndAssetCtxs();
+          let midPrice = 0;
+          for (let i = 0; i < spotData.meta.universe.length; i++) {
+            const pair = spotData.meta.universe[i];
+            const ctx = spotData.assetCtxs[i];
+            if (!pair || !ctx) continue;
+            const baseToken = spotData.meta.tokens.find(t => t.index === pair.tokens[0]);
+            if (baseToken && baseToken.name === coin) {
+              midPrice = parseFloat(ctx.midPx);
+              break;
+            }
+          }
+          return json({
+            dryRun: true,
+            action: 'spot_buy',
+            coin,
+            size,
+            type: isMarket ? 'market' : 'limit',
+            midPrice,
+            price: price ?? midPrice,
+            notional: formatUsd(midPrice * size),
+          });
+        }
+
+        const result = isMarket
+          ? await client.spotMarketOrder(coin, true, size, params.slippage as number | undefined)
+          : await client.spotLimitOrder(coin, true, size, price!, (params.tif as 'Gtc' | 'Ioc' | 'Alo') ?? 'Gtc');
+
+        return json({ action: 'spot_buy', coin, size, type: isMarket ? 'market' : 'limit', result });
+      },
+    },
+
+    {
+      name: 'ob_spot_sell',
+      description: 'Sell spot tokens on Hyperliquid. Always use dry=true first to preview.',
+      parameters: {
+        type: 'object',
+        properties: {
+          coin: { type: 'string', description: 'Base token symbol (PURR, HYPE, etc.)' },
+          size: { type: 'number', description: 'Order size in base token units' },
+          price: { type: 'number', description: 'Limit price (omit for market order)' },
+          tif: { type: 'string', description: 'Time-in-force for limit: Gtc, Ioc, Alo (default: Gtc)' },
+          slippage: { type: 'number', description: 'Slippage tolerance in bps for market orders (default: 50)' },
+          dry: { type: 'boolean', description: 'Preview without executing' },
+        },
+        required: ['coin', 'size'],
+      },
+      async execute(_id, params) {
+        const { getClient } = await import('../core/client.js');
+        const { formatUsd } = await import('../core/utils.js');
+        const client = getClient();
+
+        if (client.isReadOnly) return error('Wallet not configured. Run "openbroker setup" first.');
+
+        const coin = (params.coin as string).toUpperCase();
+        const size = params.size as number;
+        const price = params.price as number | undefined;
+        const isMarket = price === undefined;
+
+        if (params.dry) {
+          const spotData = await client.getSpotMetaAndAssetCtxs();
+          let midPrice = 0;
+          for (let i = 0; i < spotData.meta.universe.length; i++) {
+            const pair = spotData.meta.universe[i];
+            const ctx = spotData.assetCtxs[i];
+            if (!pair || !ctx) continue;
+            const baseToken = spotData.meta.tokens.find(t => t.index === pair.tokens[0]);
+            if (baseToken && baseToken.name === coin) {
+              midPrice = parseFloat(ctx.midPx);
+              break;
+            }
+          }
+          return json({
+            dryRun: true,
+            action: 'spot_sell',
+            coin,
+            size,
+            type: isMarket ? 'market' : 'limit',
+            midPrice,
+            price: price ?? midPrice,
+            notional: formatUsd(midPrice * size),
+          });
+        }
+
+        const result = isMarket
+          ? await client.spotMarketOrder(coin, false, size, params.slippage as number | undefined)
+          : await client.spotLimitOrder(coin, false, size, price!, (params.tif as 'Gtc' | 'Ioc' | 'Alo') ?? 'Gtc');
+
+        return json({ action: 'spot_sell', coin, size, type: isMarket ? 'market' : 'limit', result });
+      },
+    },
+
+    {
       name: 'ob_cancel',
       description: 'Cancel open orders on Hyperliquid',
       parameters: {

@@ -73,9 +73,9 @@ async function main() {
 
       console.log(
         time.padEnd(20) +
-        formatPercent(rate * 100, 6).padEnd(16) +
-        formatPercent(annualized * 100).padEnd(14) +
-        formatPercent(premium * 100, 4)
+        formatPercent(rate, 6).padEnd(16) +
+        formatPercent(annualized).padEnd(14) +
+        formatPercent(premium, 4)
       );
     }
 
@@ -85,8 +85,8 @@ async function main() {
 
     console.log('─'.repeat(60));
     console.log(`Samples: ${history.length}`);
-    console.log(`Avg Hourly Rate:  ${formatPercent(avgRate * 100, 6)}`);
-    console.log(`Avg Annualized:   ${formatPercent(avgAnnualized * 100)}`);
+    console.log(`Avg Hourly Rate:  ${formatPercent(avgRate, 6)}`);
+    console.log(`Avg Annualized:   ${formatPercent(avgAnnualized)}`);
 
     if (avgRate > 0) {
       console.log('Longs pay shorts');

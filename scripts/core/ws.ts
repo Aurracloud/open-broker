@@ -5,6 +5,7 @@ import { WebSocketTransport, SubscriptionClient } from '@nktkas/hyperliquid';
 import type { ISubscription } from '@nktkas/hyperliquid';
 import type {
   AllMidsWsEvent,
+  L2BookWsEvent,
   OrderUpdatesWsEvent,
   UserFillsWsEvent,
   UserEventsWsEvent,
@@ -14,6 +15,15 @@ import { isMainnet } from './config.js';
 // ── Event types ────────────────────────────────────────────────────
 
 export interface WsEventMap {
+  /** L2 order book snapshot for a specific coin */
+  l2Book: {
+    coin: string;
+    time: number;
+    levels: [
+      Array<{ px: string; sz: string; n: number }>,
+      Array<{ px: string; sz: string; n: number }>,
+    ];
+  };
   /** Mid prices for all assets updated */
   allMids: { mids: Record<string, string> };
   /** Order status changed (filled, canceled, rejected, etc.) */
@@ -170,6 +180,21 @@ export class WebSocketManager {
     const client = this.ensureClient();
     const sub = await client.allMids((data: AllMidsWsEvent) => {
       this.emit('allMids', { mids: data.mids });
+    });
+    return this.trackSub(sub);
+  }
+
+  /**
+   * Subscribe to L2 order book snapshots for a specific coin.
+   */
+  async subscribeL2Book(coin: string): Promise<ISubscription> {
+    const client = this.ensureClient();
+    const sub = await client.l2Book({ coin }, (data: L2BookWsEvent) => {
+      this.emit('l2Book', {
+        coin: data.coin,
+        time: data.time,
+        levels: data.levels,
+      });
     });
     return this.trackSub(sub);
   }

@@ -127,14 +127,29 @@ async function main() {
 
   const markets: SpotMarket[] = [];
 
-  for (let i = 0; i < spotData.meta.universe.length; i++) {
-    const pair = spotData.meta.universe[i];
-    const ctx = spotData.assetCtxs[i];
-    if (!pair || !ctx) continue;
+  // Build ctx map by coin name — the contexts array is NOT aligned with universe by index.
+  // Each context has a 'coin' field matching pair.name.
+  const ctxMap = new Map<string, { markPx: string; prevDayPx: string; dayNtlVlm: string; midPx: string }>();
+  for (const ctx of spotData.assetCtxs as Array<{ coin?: string; markPx: string; prevDayPx: string; dayNtlVlm: string; midPx: string }>) {
+    if (ctx.coin) ctxMap.set(ctx.coin, ctx);
+  }
 
-    // Filter by coin if specified
-    if (args.coin && !pair.name.toUpperCase().includes(args.coin)) {
-      continue;
+  // Build token name map for filtering by base token name
+  const tokenNameMap = new Map<number, string>();
+  for (const token of spotData.meta.tokens) {
+    tokenNameMap.set(token.index, token.name);
+  }
+
+  for (const pair of spotData.meta.universe) {
+    if (!pair) continue;
+    const ctx = ctxMap.get(pair.name);
+    if (!ctx) continue;
+
+    // Filter by coin — match pair name or base token name
+    if (args.coin) {
+      const baseTokenName = tokenNameMap.get(pair.tokens[0]) ?? '';
+      const searchable = `${pair.name} ${baseTokenName}`.toUpperCase();
+      if (!searchable.includes(args.coin)) continue;
     }
 
     markets.push({

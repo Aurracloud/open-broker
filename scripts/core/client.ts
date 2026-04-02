@@ -435,14 +435,23 @@ export class HyperliquidClient {
       }
 
       for (const pair of spotData.universe) {
-        // pair.name is the market name (e.g., "PURR/USDC", "@1")
+        // pair.name is the market name (e.g., "PURR/USDC", "@107")
         // pair.tokens = [baseTokenIndex, quoteTokenIndex]
         // pair.index is the spot universe index
         const baseToken = tokenMap.get(pair.tokens[0]);
         if (!baseToken) continue;
 
         const spotAssetIndex = 10000 + pair.index;
-        // Key by base token name for user-facing lookups (e.g., "PURR" not "PURR/USDC")
+        const quoteTokenIdx = pair.tokens[1];
+
+        // A token can appear in multiple pairs (e.g., HYPE/USDC, HYPE/USDE, HYPE/USDH).
+        // Prefer the USDC pair (quote token index 0) for the primary mapping.
+        const existing = this.spotAssetMap.get(baseToken.name);
+        if (existing !== undefined && quoteTokenIdx !== 0) {
+          // Already have a mapping — skip non-USDC pairs
+          continue;
+        }
+
         this.spotAssetMap.set(baseToken.name, spotAssetIndex);
         this.spotSzDecimalsMap.set(baseToken.name, baseToken.szDecimals);
 
@@ -1746,27 +1755,22 @@ export class HyperliquidClient {
   ): Promise<OrderResponse> {
     await this.loadSpotMeta();
 
-    // Get current mid price for the spot pair
-    const spotData = await this.getSpotMetaAndAssetCtxs();
-    let midPrice: number | null = null;
-
-    // Find the spot pair matching this coin
-    for (let i = 0; i < spotData.meta.universe.length; i++) {
-      const pair = spotData.meta.universe[i];
-      const ctx = spotData.assetCtxs[i];
-      if (!pair || !ctx) continue;
-
-      // Match by base token name
-      const baseTokenIdx = pair.tokens[0];
-      const baseToken = spotData.meta.tokens.find(t => t.index === baseTokenIdx);
-      if (baseToken && baseToken.name === coin) {
-        midPrice = parseFloat(ctx.midPx);
-        break;
-      }
+    // Get the spot pair name (@index or PURR/USDC) for allMids lookup
+    const assetIndex = this.spotAssetMap.get(coin);
+    if (assetIndex === undefined) {
+      throw new Error(`Unknown spot asset: ${coin}. Use "openbroker spot" to see available markets.`);
     }
+    const spotPairIndex = assetIndex - 10000;
+    // Canonical PURR/USDC is index 0, everything else uses @index
+    const spotCoinKey = spotPairIndex === 0 ? 'PURR/USDC' : `@${spotPairIndex}`;
+
+    // Use allMids for accurate live prices (spotMetaAndAssetCtxs contexts can be misaligned)
+    const mids = await this.getAllMids();
+    const midStr = mids[spotCoinKey];
+    const midPrice = midStr ? parseFloat(midStr) : 0;
 
     if (!midPrice || midPrice === 0) {
-      throw new Error(`No spot price for ${coin}. Check if the spot market exists with "openbroker spot --coin ${coin}".`);
+      throw new Error(`No spot price for ${coin} (${spotCoinKey}). Check if the spot market exists with "openbroker spot --coin ${coin}".`);
     }
 
     // Calculate slippage price

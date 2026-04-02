@@ -157,16 +157,40 @@ async function main() {
   if (args.type === 'all' || args.type === 'spot') {
     try {
       const spotData = await client.getSpotMetaAndAssetCtxs();
-      for (let i = 0; i < spotData.meta.universe.length; i++) {
-        const pair = spotData.meta.universe[i];
-        const ctx = spotData.assetCtxs[i];
-        if (!pair || !ctx) continue;
 
-        if (pair.name.toUpperCase().includes(query)) {
+      // Build token index → name lookup for matching by base token name
+      const tokenNameMap = new Map<number, string>();
+      for (const token of spotData.meta.tokens) {
+        tokenNameMap.set(token.index, token.name);
+      }
+
+      // Build ctx map by coin name (contexts have a 'coin' field that matches pair.name).
+      // The contexts array can be longer than universe and is NOT aligned by index.
+      const ctxMap = new Map<string, (typeof spotData.assetCtxs)[number]>();
+      for (const ctx of spotData.assetCtxs) {
+        if ((ctx as Record<string, unknown>).coin) {
+          ctxMap.set((ctx as Record<string, unknown>).coin as string, ctx);
+        }
+      }
+
+      for (const pair of spotData.meta.universe) {
+        if (!pair) continue;
+        const ctx = ctxMap.get(pair.name);
+        if (!ctx) continue;
+
+        // Match against pair name, base token name, and quote token name
+        const baseTokenName = tokenNameMap.get(pair.tokens[0]) ?? '';
+        const quoteTokenName = tokenNameMap.get(pair.tokens[1]) ?? '';
+        const searchable = `${pair.name} ${baseTokenName} ${quoteTokenName}`.toUpperCase();
+
+        if (searchable.includes(query)) {
+          const displayName = baseTokenName && quoteTokenName
+            ? `${baseTokenName}/${quoteTokenName}`
+            : pair.name;
           results.push({
             type: 'spot',
             provider: 'Spot',
-            coin: pair.name,
+            coin: displayName,
             price: ctx.markPx,
             volume24h: parseFloat(ctx.dayNtlVlm || '0'),
           });

@@ -398,14 +398,27 @@ export function createTools(watcherOrCtx: PositionWatcher | null | ToolsContext)
         if (!typeFilter || typeFilter === 'spot') {
           try {
             const spotData = await client.getSpotMetaAndAssetCtxs();
-            for (let i = 0; i < spotData.meta.universe.length; i++) {
-              const pair = spotData.meta.universe[i];
-              if (pair.name.toUpperCase().includes(query)) {
+            // Build ctx map by coin name — contexts are NOT aligned with universe by index
+            const ctxMap = new Map<string, Record<string, string>>();
+            for (const ctx of spotData.assetCtxs as Array<Record<string, string>>) {
+              if (ctx.coin) ctxMap.set(ctx.coin, ctx);
+            }
+            // Build token name map
+            const tMap = new Map<number, string>();
+            for (const t of spotData.meta.tokens) tMap.set(t.index, t.name);
+
+            for (const pair of spotData.meta.universe) {
+              const baseName = tMap.get(pair.tokens[0]) ?? '';
+              const quoteName = tMap.get(pair.tokens[1]) ?? '';
+              const searchable = `${pair.name} ${baseName} ${quoteName}`.toUpperCase();
+              if (searchable.includes(query)) {
+                const ctx = ctxMap.get(pair.name);
+                const displayName = baseName && quoteName ? `${baseName}/${quoteName}` : pair.name;
                 results.push({
-                  coin: pair.name,
+                  coin: displayName,
                   type: 'spot',
-                  markPx: spotData.assetCtxs[i]?.markPx,
-                  dayVolume: spotData.assetCtxs[i]?.dayNtlVlm,
+                  markPx: ctx?.markPx,
+                  dayVolume: ctx?.dayNtlVlm,
                 });
               }
             }
@@ -1221,19 +1234,12 @@ export function createTools(watcherOrCtx: PositionWatcher | null | ToolsContext)
         const isMarket = price === undefined;
 
         if (params.dry) {
-          // Get spot price for preview
-          const spotData = await client.getSpotMetaAndAssetCtxs();
-          let midPrice = 0;
-          for (let i = 0; i < spotData.meta.universe.length; i++) {
-            const pair = spotData.meta.universe[i];
-            const ctx = spotData.assetCtxs[i];
-            if (!pair || !ctx) continue;
-            const baseToken = spotData.meta.tokens.find(t => t.index === pair.tokens[0]);
-            if (baseToken && baseToken.name === coin) {
-              midPrice = parseFloat(ctx.midPx);
-              break;
-            }
-          }
+          // Use allMids for accurate spot price preview
+          await client.getMetaAndAssetCtxs(); // ensure spot meta loaded
+          const spotIdx = client.getSpotAssetIndex(coin);
+          const mids = await client.getAllMids();
+          const spotKey = spotIdx !== undefined ? (spotIdx === 10000 ? 'PURR/USDC' : `@${spotIdx - 10000}`) : '';
+          const midPrice = parseFloat(mids[spotKey] || '0');
           return json({
             dryRun: true,
             action: 'spot_buy',
@@ -1282,18 +1288,11 @@ export function createTools(watcherOrCtx: PositionWatcher | null | ToolsContext)
         const isMarket = price === undefined;
 
         if (params.dry) {
-          const spotData = await client.getSpotMetaAndAssetCtxs();
-          let midPrice = 0;
-          for (let i = 0; i < spotData.meta.universe.length; i++) {
-            const pair = spotData.meta.universe[i];
-            const ctx = spotData.assetCtxs[i];
-            if (!pair || !ctx) continue;
-            const baseToken = spotData.meta.tokens.find(t => t.index === pair.tokens[0]);
-            if (baseToken && baseToken.name === coin) {
-              midPrice = parseFloat(ctx.midPx);
-              break;
-            }
-          }
+          await client.getMetaAndAssetCtxs();
+          const spotIdx = client.getSpotAssetIndex(coin);
+          const mids = await client.getAllMids();
+          const spotKey = spotIdx !== undefined ? (spotIdx === 10000 ? 'PURR/USDC' : `@${spotIdx - 10000}`) : '';
+          const midPrice = parseFloat(mids[spotKey] || '0');
           return json({
             dryRun: true,
             action: 'spot_sell',

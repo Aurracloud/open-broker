@@ -74,29 +74,37 @@ async function main() {
   await checkBuilderFeeApproval(client);
 
   try {
-    // Get spot market data for the coin
-    const spotData = await client.getSpotMetaAndAssetCtxs();
-    let midPrice: number | null = null;
+    // Load spot metadata to get the pair index, then use allMids for accurate price
+    const spotMeta = await client.getSpotMeta();
+    const tokenMap = new Map<number, string>();
+    for (const t of spotMeta.tokens) tokenMap.set(t.index, t.name);
+
+    // Find the USDC-quoted pair for this coin (prefer quote token 0 = USDC)
     let pairName = '';
-
-    for (let i = 0; i < spotData.meta.universe.length; i++) {
-      const pair = spotData.meta.universe[i];
-      const ctx = spotData.assetCtxs[i];
-      if (!pair || !ctx) continue;
-
-      const baseTokenIdx = pair.tokens[0];
-      const baseToken = spotData.meta.tokens.find(t => t.index === baseTokenIdx);
-      if (baseToken && baseToken.name.toUpperCase() === coin.toUpperCase()) {
-        midPrice = parseFloat(ctx.midPx);
-        const quoteToken = spotData.meta.tokens.find(t => t.index === pair.tokens[1]);
-        pairName = `${baseToken.name}/${quoteToken?.name || 'USDC'}`;
-        break;
-      }
+    let spotCoinKey = '';
+    for (const pair of spotMeta.universe) {
+      const baseName = tokenMap.get(pair.tokens[0]) ?? '';
+      if (baseName.toUpperCase() !== coin.toUpperCase()) continue;
+      const quoteName = tokenMap.get(pair.tokens[1]) ?? 'USDC';
+      // Prefer USDC pair; if already found a USDC pair, skip non-USDC pairs
+      if (pairName && pair.tokens[1] !== 0) continue;
+      pairName = `${baseName}/${quoteName}`;
+      spotCoinKey = pair.name; // "@107" or "PURR/USDC"
+      if (pair.tokens[1] === 0) break; // USDC pair found, stop
     }
 
-    if (!midPrice || midPrice === 0) {
+    if (!spotCoinKey) {
       console.error(`Error: No spot market found for ${coin}`);
       console.error('Use "openbroker spot" to see available spot markets.');
+      process.exit(1);
+    }
+
+    // Use allMids for live price (spotMetaAndAssetCtxs contexts can be misaligned)
+    const mids = await client.getAllMids();
+    const midPrice = parseFloat(mids[spotCoinKey] || '0');
+
+    if (!midPrice || midPrice === 0) {
+      console.error(`Error: No spot price for ${coin} (${spotCoinKey})`);
       process.exit(1);
     }
 

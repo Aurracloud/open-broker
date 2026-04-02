@@ -1,9 +1,15 @@
 // CLI entry point for `openbroker auto` commands
 
+import { spawnSync } from 'child_process';
+import { fileURLToPath } from 'url';
+import path from 'path';
 import { parseArgs } from '../core/utils.js';
 import { resolveScriptPath, resolveExamplePath, listAutomations, listExamples, loadExampleConfigs, ensureAutomationsDir } from './loader.js';
 import { startAutomation, getRunningAutomations, getRegisteredAutomations } from './runtime.js';
 import { unregisterAutomation, cleanRegistry } from './registry.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 function printUsage() {
   console.log(`
@@ -12,6 +18,7 @@ OpenBroker Automations — event-driven trading scripts
 Usage:
   openbroker auto run <script> [options]    Run an automation script
   openbroker auto run --example <name>      Run a bundled example automation
+  openbroker auto report <id>               Read the local audit report for an automation
   openbroker auto examples                  List bundled example automations
   openbroker auto stop <id>                 Unregister an automation (won't restart)
   openbroker auto list                      List available automations
@@ -45,6 +52,7 @@ Examples:
   openbroker auto run --example dca --set coin=BTC --set amount=50 --dry
   openbroker auto run --example grid --set coin=ETH --set lower=3000 --set upper=4000
   openbroker auto run my-strategy --dry
+  openbroker auto report hype-mm-v2-live-r4
   openbroker auto examples
 `);
 }
@@ -270,6 +278,27 @@ function cleanCommand() {
   console.log('Cleaned stale entries from registry');
 }
 
+function reportCommand(rawArgs: string[]) {
+  const scriptPath = path.join(__dirname, 'report.ts');
+  const result = spawnSync(
+    process.execPath,
+    ['--experimental-sqlite', '--no-warnings', '--import', 'tsx', scriptPath, ...rawArgs],
+    {
+      stdio: 'inherit',
+      cwd: path.resolve(__dirname, '../..'),
+      env: { ...process.env },
+    },
+  );
+
+  if (result.error) {
+    throw result.error;
+  }
+
+  if (typeof result.status === 'number' && result.status !== 0) {
+    process.exit(result.status);
+  }
+}
+
 async function main() {
   const rawArgs = process.argv.slice(2);
 
@@ -321,6 +350,9 @@ async function main() {
       break;
     case 'clean':
       cleanCommand();
+      break;
+    case 'report':
+      reportCommand(restArgs);
       break;
     default:
       console.error(`Unknown subcommand: ${subcommand}`);

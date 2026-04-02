@@ -4,7 +4,7 @@ description: Hyperliquid trading plugin with background position monitoring and 
 license: MIT
 compatibility: Requires Node.js 22+, network access to api.hyperliquid.xyz
 homepage: https://www.npmjs.com/package/openbroker
-metadata: {"author": "monemetrics", "version": "1.0.79", "openclaw": {"requires": {"bins": ["openbroker"], "env": ["HYPERLIQUID_PRIVATE_KEY"]}, "primaryEnv": "HYPERLIQUID_PRIVATE_KEY", "install": [{"id": "node", "kind": "node", "package": "openbroker", "bins": ["openbroker"], "label": "Install openbroker (npm)"}]}}
+metadata: {"author": "monemetrics", "version": "1.0.80", "openclaw": {"requires": {"bins": ["openbroker"], "env": ["HYPERLIQUID_PRIVATE_KEY"]}, "primaryEnv": "HYPERLIQUID_PRIVATE_KEY", "install": [{"id": "node", "kind": "node", "package": "openbroker", "bins": ["openbroker"], "label": "Install openbroker (npm)"}]}}
 allowed-tools: ob_account ob_positions ob_funding ob_markets ob_search ob_spot ob_fills ob_orders ob_order_status ob_fees ob_candles ob_funding_history ob_trades ob_rate_limit ob_funding_scan ob_buy ob_sell ob_limit ob_trigger ob_tpsl ob_cancel ob_spot_buy ob_spot_sell ob_twap ob_twap_cancel ob_twap_status ob_bracket ob_chase ob_watcher_status ob_auto_run ob_auto_stop ob_auto_list Bash(openbroker:*)
 ---
 
@@ -583,9 +583,13 @@ export default function(api) {
 | `api.state.clear()` | Clear all state |
 | `api.publish(message, options?)` | Send a message to the OpenClaw agent via webhook. Triggers an agent turn — the agent receives the message and can notify the user, take action, etc. Returns `true` if delivered. Options: `{ name?, wakeMode?, deliver?, channel? }` |
 | `api.log.info/warn/error/debug(msg)` | Structured logger |
+| `api.audit.record(kind, payload?)` | Add a custom audit note to the local SQLite trail for later reporting |
+| `api.audit.metric(name, value, tags?)` | Add a numeric metric to the local SQLite trail |
 | `api.utils` | `roundPrice`, `roundSize`, `sleep`, `normalizeCoin`, `formatUsd`, `annualizeFundingRate` |
 | `api.id` | Automation ID (filename or `--id` flag) |
 | `api.dryRun` | `true` if running with `--dry` (write methods are intercepted) |
+
+Automations now write a local audit trail automatically to `~/.openbroker/automation-audit.sqlite`. The runtime records run config, logs, state changes, write actions, order updates, fills, user events, and per-poll account snapshots so you can generate performance reports later.
 
 ### Events
 

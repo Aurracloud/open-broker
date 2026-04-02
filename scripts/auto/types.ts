@@ -87,6 +87,13 @@ export interface AutomationLogger {
   debug(message: string): void;
 }
 
+export interface AutomationAudit {
+  /** Record a custom audit note for later reporting. */
+  record(kind: string, payload?: unknown): void;
+  /** Record a numeric metric with optional dimensions/tags. */
+  metric(name: string, value: number, tags?: Record<string, unknown>): void;
+}
+
 // ── Publish (webhook) ───────────────────────────────────────────────
 
 export interface PublishOptions {
@@ -148,6 +155,9 @@ export interface AutomationAPI {
 
   /** Structured logger */
   log: AutomationLogger;
+
+  /** Local audit trail persisted to ~/.openbroker/automation-audit.sqlite */
+  audit: AutomationAudit;
 
   /** Unique automation ID (derived from filename or --id flag) */
   id: string;

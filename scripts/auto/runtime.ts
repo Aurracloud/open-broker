@@ -13,12 +13,16 @@ import {
 import { WebSocketManager } from '../core/ws.js';
 import { AutomationEventBus } from './events.js';
 import { loadAutomation } from './loader.js';
-import { registerAutomation, unregisterAutomation, markAutomationError, getRegisteredAutomations as getRegisteredFromFile } from './registry.js';
+import { registerAutomation, unregisterAutomation, getRegisteredAutomations as getRegisteredFromFile } from './registry.js';
+import { createAutomationAudit, toSerializable, type AutomationAuditSink } from './audit.js';
 import type {
   AutomationAPI,
+  AutomationEventPayloads,
+  AutomationEventType,
   AutomationLogger,
   AutomationState,
   AutomationSnapshot,
+  AutomationAudit,
   PositionSnapshot,
   PublishOptions,
   ScheduledTask,
@@ -26,14 +30,27 @@ import type {
 } from './types.js';
 
 const STATE_DIR = path.join(os.homedir(), '.openbroker', 'state');
+const AUDITED_WRITE_METHODS = new Set([
+  'order', 'marketOrder', 'limitOrder', 'triggerOrder',
+  'takeProfit', 'stopLoss', 'cancel', 'cancelAll',
+  'spotOrder', 'spotMarketOrder', 'spotLimitOrder', 'spotCancel',
+  'updateLeverage', 'approveBuilderFee', 'twapOrder', 'twapCancel',
+]);
 
 // ── State persistence ───────────────────────────────────────────────
 
-function createState(id: string): AutomationState {
+interface StateController {
+  state: AutomationState;
+  snapshot(): Record<string, unknown>;
+  attachAudit(audit: AutomationAuditSink): void;
+}
+
+function createState(id: string): StateController {
   mkdirSync(STATE_DIR, { recursive: true });
   const stateFile = path.join(STATE_DIR, `${id}.json`);
 
   let data: Record<string, unknown> = {};
+  let audit: AutomationAuditSink | null = null;
   if (existsSync(stateFile)) {
     try {
       data = JSON.parse(readFileSync(stateFile, 'utf-8'));
@@ -52,33 +69,59 @@ function createState(id: string): AutomationState {
   }
 
   return {
-    get<T = unknown>(key: string, defaultValue?: T): T | undefined {
-      return (key in data ? data[key] : defaultValue) as T | undefined;
+    state: {
+      get<T = unknown>(key: string, defaultValue?: T): T | undefined {
+        return (key in data ? data[key] : defaultValue) as T | undefined;
+      },
+      set<T = unknown>(key: string, value: T): void {
+        data[key] = value;
+        audit?.recordStateChange('set', key, value);
+        scheduleFlush();
+      },
+      delete(key: string): void {
+        const previous = key in data ? data[key] : undefined;
+        delete data[key];
+        audit?.recordStateChange('delete', key, previous);
+        scheduleFlush();
+      },
+      clear(): void {
+        data = {};
+        audit?.recordStateChange('clear', null);
+        scheduleFlush();
+      },
     },
-    set<T = unknown>(key: string, value: T): void {
-      data[key] = value;
-      scheduleFlush();
+    snapshot(): Record<string, unknown> {
+      return toSerializable(data);
     },
-    delete(key: string): void {
-      delete data[key];
-      scheduleFlush();
-    },
-    clear(): void {
-      data = {};
-      scheduleFlush();
+    attachAudit(nextAudit: AutomationAuditSink): void {
+      audit = nextAudit;
     },
   };
 }
 
 // ── Logger ──────────────────────────────────────────────────────────
 
-function createLogger(id: string, verbose: boolean): AutomationLogger {
+function createLogger(id: string, verbose: boolean, audit?: AutomationAuditSink): AutomationLogger {
   const prefix = `[auto:${id}]`;
   return {
-    info: (msg: string) => console.log(`${prefix} ${msg}`),
-    warn: (msg: string) => console.log(`${prefix} ⚠ ${msg}`),
-    error: (msg: string) => console.error(`${prefix} ✗ ${msg}`),
-    debug: (msg: string) => { if (verbose) console.log(`${prefix} … ${msg}`); },
+    info: (msg: string) => {
+      audit?.recordLog('info', msg);
+      console.log(`${prefix} ${msg}`);
+    },
+    warn: (msg: string) => {
+      audit?.recordLog('warn', msg);
+      console.log(`${prefix} ⚠ ${msg}`);
+    },
+    error: (msg: string) => {
+      audit?.recordLog('error', msg);
+      console.error(`${prefix} ✗ ${msg}`);
+    },
+    debug: (msg: string) => {
+      if (verbose) {
+        audit?.recordLog('debug', msg);
+        console.log(`${prefix} … ${msg}`);
+      }
+    },
   };
 }
 
@@ -88,6 +131,8 @@ const WRITE_METHODS = new Set([
   'order', 'marketOrder', 'limitOrder', 'triggerOrder',
   'takeProfit', 'stopLoss', 'cancel', 'cancelAll',
   'updateLeverage', 'approveBuilderFee',
+  'spotOrder', 'spotMarketOrder', 'spotLimitOrder', 'spotCancel',
+  'twapOrder', 'twapCancel',
 ]);
 
 function createDryClient(client: HyperliquidClient, log: AutomationLogger): HyperliquidClient {
@@ -98,6 +143,52 @@ function createDryClient(client: HyperliquidClient, log: AutomationLogger): Hype
         return (...args: unknown[]) => {
           log.info(`[DRY] ${prop}(${args.map(a => JSON.stringify(a)).join(', ')})`);
           return Promise.resolve({ status: 'ok', response: { type: 'dry_run' } });
+        };
+      }
+      return value;
+    },
+  });
+}
+
+function createAuditedClient(
+  client: HyperliquidClient,
+  audit: AutomationAuditSink,
+  dryRun: boolean,
+): HyperliquidClient {
+  return new Proxy(client, {
+    get(target, prop, receiver) {
+      const value = Reflect.get(target, prop, receiver);
+      if (typeof prop === 'string' && AUDITED_WRITE_METHODS.has(prop) && typeof value === 'function') {
+        return async (...args: unknown[]) => {
+          const actionId = `${prop}:${Date.now()}:${Math.random().toString(16).slice(2)}`;
+          audit.recordAction({
+            actionId,
+            phase: 'request',
+            method: prop,
+            payload: { args },
+            dryRun,
+          });
+
+          try {
+            const result = await value.apply(target, args);
+            audit.recordAction({
+              actionId,
+              phase: 'response',
+              method: prop,
+              result,
+              dryRun,
+            });
+            return result;
+          } catch (error) {
+            audit.recordAction({
+              actionId,
+              phase: 'error',
+              method: prop,
+              error,
+              dryRun,
+            });
+            throw error;
+          }
         };
       }
       return value;
@@ -221,6 +312,22 @@ function createPublish(
   };
 }
 
+function createAuditedPublish(
+  publish: (message: string, options?: PublishOptions) => Promise<boolean>,
+  audit: AutomationAuditSink,
+): (message: string, options?: PublishOptions) => Promise<boolean> {
+  return async (message: string, options?: PublishOptions): Promise<boolean> => {
+    try {
+      const delivered = await publish(message, options);
+      audit.recordPublish(message, options, delivered);
+      return delivered;
+    } catch (error) {
+      audit.recordError('publish', error);
+      throw error;
+    }
+  };
+}
+
 // ── Runtime ─────────────────────────────────────────────────────────
 
 export interface RuntimeOptions {
@@ -279,14 +386,13 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
     throw new Error(`Automation "${id}" is already running`);
   }
 
-  const log = createLogger(id, verbose);
-  const state = createState(id);
+  const stateController = createState(id);
 
   // Pre-seed state from --set flags (doesn't overwrite already-persisted keys)
   if (initialState) {
     for (const [key, value] of Object.entries(initialState)) {
-      if (state.get(key) === undefined) {
-        state.set(key, value);
+      if (stateController.state.get(key) === undefined) {
+        stateController.state.set(key, value);
       }
     }
   }
@@ -294,7 +400,24 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
   const eventBus = new AutomationEventBus();
 
   const rawClient = getClient();
-  const client = dryRun ? createDryClient(rawClient, log) : rawClient;
+  const audit = createAutomationAudit({
+    automationId: id,
+    scriptPath,
+    dryRun,
+    verbose,
+    pollIntervalMs,
+    useWebSocket,
+    accountAddress: rawClient.address,
+    walletAddress: rawClient.walletAddress,
+    isApiWallet: rawClient.isApiWallet,
+    initialState,
+    persistedState: stateController.snapshot(),
+  });
+  stateController.attachAudit(audit);
+
+  const log = createLogger(id, verbose, audit);
+  const baseClient = dryRun ? createDryClient(rawClient, log) : rawClient;
+  const client = createAuditedClient(baseClient, audit, dryRun);
 
   const startHooks: Array<() => void | Promise<void>> = [];
   const stopHooks: Array<() => void | Promise<void>> = [];
@@ -302,7 +425,11 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
   const scheduledTasks: ScheduledTask[] = [];
 
   // Build the API object
-  const publish = createPublish(id, log, gatewayPort, hooksToken);
+  const publish = createAuditedPublish(createPublish(id, log, gatewayPort, hooksToken), audit);
+  const auditApi: AutomationAudit = {
+    record: (kind: string, payload?: unknown) => audit.recordNote(kind, payload),
+    metric: (name: string, value: number, tags?: Record<string, unknown>) => audit.recordMetric(name, value, tags),
+  };
   const api: AutomationAPI = {
     client,
     utils: { roundPrice, roundSize, sleep, normalizeCoin, formatUsd, formatPercent, annualizeFundingRate },
@@ -312,22 +439,37 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
     onStop: (handler) => stopHooks.push(handler),
     onError: (handler) => errorHooks.push(handler),
     publish,
-    state,
+    state: stateController.state,
     log,
+    audit: auditApi,
     id,
     dryRun,
   };
 
-  // Load and execute the factory function (registers handlers)
-  log.info(`Loading automation: ${scriptPath}`);
-  const factory = await loadAutomation(scriptPath);
-  await factory(api);
+  try {
+    // Load and execute the factory function (registers handlers)
+    log.info(`Loading automation: ${scriptPath}`);
+    const factory = await loadAutomation(scriptPath);
+    await factory(api);
 
-  // Call onStart hooks
-  for (const hook of startHooks) {
-    try { await hook(); } catch (err) {
-      log.error(`onStart hook error: ${err instanceof Error ? err.message : String(err)}`);
+    // Call onStart hooks
+    for (const hook of startHooks) {
+      try { await hook(); } catch (err) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        audit.recordError('onStart', error);
+        log.error(`onStart hook error: ${error.message}`);
+      }
     }
+  } catch (err) {
+    const error = err instanceof Error ? err : new Error(String(err));
+    audit.recordError('startup', error);
+    await audit.stop({
+      status: 'error',
+      stopReason: 'startup_error',
+      pollCount: 0,
+      eventsEmitted: 0,
+    });
+    throw error;
   }
 
   // Polling state (declared early so WebSocket handlers can reference)
@@ -339,11 +481,29 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
 
   async function handleErrors(errors: Error[]) {
     for (const err of errors) {
+      audit.recordError('handler', err);
       log.error(`Handler error: ${err.message}`);
       for (const hook of errorHooks) {
         try { await hook(err); } catch { /* swallow */ }
       }
     }
+  }
+
+  function shouldPersistEvent(event: AutomationEventType): boolean {
+    return event !== 'tick' && event !== 'price_change';
+  }
+
+  async function emitAutomationEvent<E extends AutomationEventType>(
+    event: E,
+    payload: AutomationEventPayloads[E],
+    source: 'poll' | 'ws' | 'manual',
+  ): Promise<void> {
+    if (shouldPersistEvent(event)) {
+      audit.recordEvent(event, source, payload);
+    }
+    const errors = await eventBus.emit(event, payload);
+    if (errors.length) await handleErrors(errors);
+    eventsEmitted++;
   }
 
   // ── WebSocket setup ─────────────────────────────────────────────
@@ -368,17 +528,27 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
           if (oldPrice !== undefined && oldPrice !== 0 && eventBus.has('price_change')) {
             const changePct = ((newPrice - oldPrice) / oldPrice) * 100;
             if (Math.abs(changePct) >= 0.01) {
-              eventBus.emit('price_change', { coin, oldPrice, newPrice, changePct })
-                .then(errors => { if (errors.length) handleErrors(errors); });
-              eventsEmitted++;
+              void emitAutomationEvent('price_change', { coin, oldPrice, newPrice, changePct }, 'ws');
             }
           }
         }
       });
 
       ws.on('orderUpdate', (update) => {
+        audit.recordOrderUpdate({
+          coin: update.order.coin,
+          oid: update.order.oid,
+          side: update.order.side === 'B' ? 'buy' : 'sell',
+          size: parseFloat(update.order.sz),
+          price: parseFloat(update.order.limitPx),
+          origSize: parseFloat(update.order.origSz),
+          status: update.status,
+          statusTimestamp: update.statusTimestamp,
+          raw: update,
+        });
+
         if (eventBus.has('order_update')) {
-          eventBus.emit('order_update', {
+          void emitAutomationEvent('order_update', {
             coin: update.order.coin,
             oid: update.order.oid,
             side: update.order.side === 'B' ? 'buy' : 'sell',
@@ -387,45 +557,55 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
             origSize: parseFloat(update.order.origSz),
             status: update.status,
             statusTimestamp: update.statusTimestamp,
-          }).then(errors => { if (errors.length) handleErrors(errors); });
-          eventsEmitted++;
+          }, 'ws');
         }
 
         // Also emit order_filled for backward compatibility
         if (update.status === 'filled' && eventBus.has('order_filled')) {
-          eventBus.emit('order_filled', {
+          void emitAutomationEvent('order_filled', {
             coin: update.order.coin,
             oid: update.order.oid,
             side: update.order.side === 'B' ? 'buy' : 'sell',
             size: parseFloat(update.order.sz),
             price: parseFloat(update.order.limitPx),
-          }).then(errors => { if (errors.length) handleErrors(errors); });
-          eventsEmitted++;
+          }, 'ws');
         }
       });
 
       ws.on('userFill', (fill) => {
         // userFill events are already covered by order_update with status=filled
         // But this provides the realized PnL and fee data that order_update doesn't have
+        audit.recordFill({
+          coin: fill.coin,
+          side: fill.side === 'B' ? 'buy' : 'sell',
+          size: fill.sz,
+          price: fill.px,
+          time: fill.time,
+          closedPnl: fill.closedPnl,
+          fee: fill.fee,
+          oid: fill.oid,
+          crossed: fill.crossed,
+        }, fill.time);
         log.debug(`Fill: ${fill.side === 'B' ? 'BUY' : 'SELL'} ${fill.sz} ${fill.coin} @ ${fill.px} (PnL: ${fill.closedPnl})`);
       });
 
       ws.on('userEvent', (event) => {
+        audit.recordUserEvent(event);
         // Handle liquidation events — only available through WebSocket
         if ('liquidation' in event && eventBus.has('liquidation')) {
           const liq = event.liquidation;
-          eventBus.emit('liquidation', {
+          void emitAutomationEvent('liquidation', {
             lid: liq.lid,
             liquidator: liq.liquidator,
             liquidatedUser: liq.liquidated_user,
             liquidatedNtlPos: parseFloat(liq.liquidated_ntl_pos),
             liquidatedAccountValue: parseFloat(liq.liquidated_account_value),
-          }).then(errors => { if (errors.length) handleErrors(errors); });
-          eventsEmitted++;
+          }, 'ws');
         }
       });
 
       ws.on('error', ({ error }) => {
+        audit.recordError('websocket', error);
         log.warn(`WebSocket error: ${error.message}`);
       });
 
@@ -444,7 +624,9 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
       await ws.subscribeAll(userAddress);
       log.info('WebSocket subscriptions active (allMids, orderUpdates, userFills, userEvents)');
     } catch (err) {
-      log.warn(`WebSocket setup failed: ${err instanceof Error ? err.message : String(err)} — using REST polling only`);
+      const error = err instanceof Error ? err : new Error(String(err));
+      audit.recordError('websocket_setup', error);
+      log.warn(`WebSocket setup failed: ${error.message} — using REST polling only`);
       ws = null;
       wsConnected = false;
     }
@@ -458,11 +640,17 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
       const snapshot = await buildSnapshot(rawClient);
       pollCount++;
       const now = Date.now();
+      audit.recordSnapshot({
+        pollCount,
+        equity: snapshot.equity,
+        marginUsed: snapshot.marginUsed,
+        marginUsedPct: snapshot.marginUsedPct,
+        positions: [...snapshot.positions.values()],
+        timestamp: now,
+      });
 
       // Always emit tick
-      const tickErrors = await eventBus.emit('tick', { timestamp: now, pollCount });
-      if (tickErrors.length) await handleErrors(tickErrors);
-      eventsEmitted++;
+      await emitAutomationEvent('tick', { timestamp: now, pollCount }, 'poll');
 
       if (previousSnapshot) {
         // Price changes (skip when WebSocket is handling real-time prices)
@@ -472,9 +660,7 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
             if (oldPrice === undefined || oldPrice === 0) continue;
             const changePct = ((newPrice - oldPrice) / oldPrice) * 100;
             if (Math.abs(changePct) >= 0.01) { // 0.01% minimum to fire (filters rounding noise)
-              const errors = await eventBus.emit('price_change', { coin, oldPrice, newPrice, changePct });
-              if (errors.length) await handleErrors(errors);
-              eventsEmitted++;
+              await emitAutomationEvent('price_change', { coin, oldPrice, newPrice, changePct }, 'poll');
             }
           }
         }
@@ -482,14 +668,12 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
         // Funding updates
         if (eventBus.has('funding_update')) {
           for (const [coin, data] of snapshot.fundingRates) {
-            const errors = await eventBus.emit('funding_update', {
+            await emitAutomationEvent('funding_update', {
               coin,
               fundingRate: data.rate,
               annualized: annualizeFundingRate(data.rate),
               premium: data.premium,
-            });
-            if (errors.length) await handleErrors(errors);
-            eventsEmitted++;
+            }, 'poll');
           }
         }
 
@@ -497,14 +681,12 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
         if (eventBus.has('position_opened')) {
           for (const [coin, pos] of snapshot.positions) {
             if (!previousSnapshot.positions.has(coin)) {
-              const errors = await eventBus.emit('position_opened', {
+              await emitAutomationEvent('position_opened', {
                 coin,
                 side: pos.size > 0 ? 'long' : 'short',
                 size: Math.abs(pos.size),
                 entryPrice: pos.entryPrice,
-              });
-              if (errors.length) await handleErrors(errors);
-              eventsEmitted++;
+              }, 'poll');
             }
           }
         }
@@ -513,13 +695,11 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
         if (eventBus.has('position_closed')) {
           for (const [coin, prevPos] of previousSnapshot.positions) {
             if (!snapshot.positions.has(coin)) {
-              const errors = await eventBus.emit('position_closed', {
+              await emitAutomationEvent('position_closed', {
                 coin,
                 previousSize: prevPos.size,
                 entryPrice: prevPos.entryPrice,
-              });
-              if (errors.length) await handleErrors(errors);
-              eventsEmitted++;
+              }, 'poll');
             }
           }
         }
@@ -529,14 +709,12 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
           for (const [coin, pos] of snapshot.positions) {
             const prevPos = previousSnapshot.positions.get(coin);
             if (prevPos && pos.size !== prevPos.size) {
-              const errors = await eventBus.emit('position_changed', {
+              await emitAutomationEvent('position_changed', {
                 coin,
                 oldSize: prevPos.size,
                 newSize: pos.size,
                 entryPrice: pos.entryPrice,
-              });
-              if (errors.length) await handleErrors(errors);
-              eventsEmitted++;
+              }, 'poll');
             }
           }
         }
@@ -549,14 +727,12 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
             const pnlChange = Math.abs(pos.unrealizedPnl - prevPos.unrealizedPnl);
             const changePct = (pnlChange / pos.positionValue) * 100;
             if (changePct >= 5) {
-              const errors = await eventBus.emit('pnl_threshold', {
+              await emitAutomationEvent('pnl_threshold', {
                 coin,
                 unrealizedPnl: pos.unrealizedPnl,
                 changePct,
                 positionValue: pos.positionValue,
-              });
-              if (errors.length) await handleErrors(errors);
-              eventsEmitted++;
+              }, 'poll');
             }
           }
         }
@@ -565,13 +741,11 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
         if (eventBus.has('margin_warning') && snapshot.marginUsedPct >= 80) {
           const prevPct = previousSnapshot.marginUsedPct;
           if (prevPct < 80 || snapshot.marginUsedPct - prevPct >= 5) {
-            const errors = await eventBus.emit('margin_warning', {
+            await emitAutomationEvent('margin_warning', {
               marginUsedPct: snapshot.marginUsedPct,
               equity: snapshot.equity,
               marginUsed: snapshot.marginUsed,
-            });
-            if (errors.length) await handleErrors(errors);
-            eventsEmitted++;
+            }, 'poll');
           }
         }
 
@@ -586,6 +760,7 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
             await task.handler();
           } catch (err) {
             const error = err instanceof Error ? err : new Error(String(err));
+            audit.recordError('scheduled_task', error);
             log.error(`Scheduled task error: ${error.message}`);
             await handleErrors([error]);
           }
@@ -595,7 +770,9 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
 
       previousSnapshot = snapshot;
     } catch (err) {
-      log.error(`Poll error: ${err instanceof Error ? err.message : String(err)}`);
+      const error = err instanceof Error ? err : new Error(String(err));
+      audit.recordError('poll', error);
+      log.error(`Poll error: ${error.message}`);
     } finally {
       isPolling = false;
     }
@@ -624,7 +801,9 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
 
     for (const hook of stopHooks) {
       try { await hook(); } catch (err) {
-        log.error(`onStop hook error: ${err instanceof Error ? err.message : String(err)}`);
+        const error = err instanceof Error ? err : new Error(String(err));
+        audit.recordError('onStop', error);
+        log.error(`onStop hook error: ${error.message}`);
       }
     }
 
@@ -637,6 +816,12 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
       unregisterAutomation(id);
     }
     log.info(`Stopped (${pollCount} polls, ${eventsEmitted} events)`);
+    await audit.stop({
+      status: 'stopped',
+      stopReason: opts?.persist === false ? 'shutdown_keep_registry' : 'manual_stop',
+      pollCount,
+      eventsEmitted,
+    });
   }
 
   const entry: RunningAutomation = {

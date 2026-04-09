@@ -388,12 +388,10 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
 
   const stateController = createState(id);
 
-  // Pre-seed state from --set flags (doesn't overwrite already-persisted keys)
+  // Apply --set flags before the factory function runs so CLI overrides win over persisted state.
   if (initialState) {
     for (const [key, value] of Object.entries(initialState)) {
-      if (stateController.state.get(key) === undefined) {
-        stateController.state.set(key, value);
-      }
+      stateController.state.set(key, value);
     }
   }
 

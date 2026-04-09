@@ -145,44 +145,62 @@ export class HyperliquidClient {
    * Asset index formula: 100000 + dexIdx * 10000 + assetIdx
    * Coins are keyed as "dexName:COIN" (e.g., "xyz:CL")
    */
+  /** Max HIP-3 dexes to load on testnet (testnet has many junk/test dexes) */
+  private static readonly TESTNET_HIP3_MAX = 20;
+
   private async loadHip3Assets(): Promise<void> {
     try {
       const dexs = await this.getPerpDexs();
-      const baseUrl = isMainnet()
+      const mainnet = isMainnet();
+      const baseUrl = mainnet
         ? 'https://api.hyperliquid.xyz'
         : 'https://api.hyperliquid-testnet.xyz';
 
+      // Build list of valid dexes to load
+      const dexEntries: Array<{ dex: { name: string }; dexIdx: number }> = [];
       for (let dexIdx = 1; dexIdx < dexs.length; dexIdx++) {
         const dex = dexs[dexIdx];
-        if (!dex) continue;
+        if (dex) dexEntries.push({ dex, dexIdx });
+      }
 
-        try {
+      // Cap on testnet to avoid loading hundreds of junk dexes
+      if (!mainnet && dexEntries.length > HyperliquidClient.TESTNET_HIP3_MAX) {
+        this.log(`Testnet: loading first ${HyperliquidClient.TESTNET_HIP3_MAX} of ${dexEntries.length} HIP-3 dexes (use mainnet for full list)`);
+        dexEntries.length = HyperliquidClient.TESTNET_HIP3_MAX;
+      }
+
+      // Fetch all dexes in parallel
+      const results = await Promise.allSettled(
+        dexEntries.map(async ({ dex, dexIdx }) => {
           const dexResponse = await fetch(baseUrl + '/info', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ type: 'metaAndAssetCtxs', dex: dex.name }),
           });
-          const dexData = await dexResponse.json();
+          return { dex, dexIdx, data: await dexResponse.json() };
+        })
+      );
 
-          if (dexData && dexData[0]?.universe) {
-            const universe = dexData[0].universe as Array<{ name: string; szDecimals: number; maxLeverage: number; onlyIsolated?: boolean }>;
-            this.log(`Loading HIP-3 dex: ${dex.name} with ${universe.length} markets`);
+      for (const result of results) {
+        if (result.status === 'rejected') {
+          this.log(`Failed to load HIP-3 dex:`, result.reason);
+          continue;
+        }
+        const { dex, dexIdx, data: dexData } = result.value;
+        if (dexData && dexData[0]?.universe) {
+          const universe = dexData[0].universe as Array<{ name: string; szDecimals: number; maxLeverage: number; onlyIsolated?: boolean }>;
+          this.log(`Loading HIP-3 dex: ${dex.name} with ${universe.length} markets`);
 
-            universe.forEach((asset, assetIdx) => {
-              // API returns names already prefixed (e.g., "xyz:CL"), use as-is
-              const coinName = asset.name;
-              // Extract local name by stripping dex prefix if present
-              const localName = coinName.startsWith(dex.name + ':') ? coinName.slice(dex.name.length + 1) : coinName;
-              const globalIndex = 100000 + dexIdx * 10000 + assetIdx;
+          universe.forEach((asset, assetIdx) => {
+            const coinName = asset.name;
+            const localName = coinName.startsWith(dex.name + ':') ? coinName.slice(dex.name.length + 1) : coinName;
+            const globalIndex = 100000 + dexIdx * 10000 + assetIdx;
 
-              this.assetMap.set(coinName, globalIndex);
-              this.szDecimalsMap.set(coinName, asset.szDecimals);
-              this.coinDexMap.set(coinName, { dexName: dex.name, dexIdx, localName });
-              if (asset.maxLeverage) this.hip3MaxLeverageMap.set(coinName, asset.maxLeverage);
-            });
-          }
-        } catch (e) {
-          this.log(`Failed to load HIP-3 dex ${dex.name}:`, e);
+            this.assetMap.set(coinName, globalIndex);
+            this.szDecimalsMap.set(coinName, asset.szDecimals);
+            this.coinDexMap.set(coinName, { dexName: dex.name, dexIdx, localName });
+            if (asset.maxLeverage) this.hip3MaxLeverageMap.set(coinName, asset.maxLeverage);
+          });
         }
       }
     } catch (e) {
@@ -194,31 +212,32 @@ export class HyperliquidClient {
     this.log('Fetching allMids...');
     const response = await this.info.allMids() as Record<string, string>;
 
-    // Also fetch HIP-3 dex mids
+    // Also fetch HIP-3 dex mids (in parallel)
     try {
       const dexs = await this.getPerpDexs();
       const baseUrl = isMainnet()
         ? 'https://api.hyperliquid.xyz'
         : 'https://api.hyperliquid-testnet.xyz';
 
-      for (let i = 1; i < dexs.length; i++) {
-        const dex = dexs[i];
-        if (!dex) continue;
-
-        try {
+      const validDexs = dexs.slice(1).filter((d): d is NonNullable<typeof d> => d != null);
+      const results = await Promise.allSettled(
+        validDexs.map(async (dex) => {
           const dexResponse = await fetch(baseUrl + '/info', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ type: 'allMids', dex: dex.name }),
           });
-          const dexMids = await dexResponse.json() as Record<string, string>;
+          return { dex, mids: await dexResponse.json() as Record<string, string> };
+        })
+      );
 
-          // Merge directly — API already returns prefixed keys (e.g., "xyz:CL")
-          for (const [coin, mid] of Object.entries(dexMids)) {
-            response[coin] = mid;
-          }
-        } catch (e) {
-          this.log(`Failed to fetch mids for HIP-3 dex ${dex.name}:`, e);
+      for (const result of results) {
+        if (result.status === 'rejected') {
+          this.log('Failed to fetch HIP-3 dex mids:', result.reason);
+          continue;
+        }
+        for (const [coin, mid] of Object.entries(result.value.mids)) {
+          response[coin] = mid;
         }
       }
     } catch (e) {
@@ -306,32 +325,34 @@ export class HyperliquidClient {
       assetCtxs: mainData[1],
     });
 
-    // Get HIP-3 dex names
+    // Get HIP-3 dex names and fetch all in parallel
     const dexs = await this.getPerpDexs();
+    const validDexs = dexs.slice(1).filter((d): d is NonNullable<typeof d> => d != null);
 
-    // Fetch each HIP-3 dex by name
-    for (let i = 1; i < dexs.length; i++) {
-      const dex = dexs[i];
-      if (!dex) continue;
-
-      try {
+    const hip3Results = await Promise.allSettled(
+      validDexs.map(async (dex) => {
         const dexResponse = await fetch(baseUrl + '/info', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ type: 'metaAndAssetCtxs', dex: dex.name }),
         });
-        const dexData = await dexResponse.json();
+        return { dex, data: await dexResponse.json() };
+      })
+    );
 
-        if (dexData && dexData[0]?.universe) {
-          this.log(`Fetched HIP-3 dex: ${dex.name} with ${dexData[0].universe.length} markets`);
-          results.push({
-            dexName: dex.name,
-            meta: { universe: dexData[0].universe },
-            assetCtxs: dexData[1] || [],
-          });
-        }
-      } catch (e) {
-        this.log(`Failed to fetch HIP-3 dex ${dex.name}:`, e);
+    for (const result of hip3Results) {
+      if (result.status === 'rejected') {
+        this.log('Failed to fetch HIP-3 dex:', result.reason);
+        continue;
+      }
+      const { dex, data: dexData } = result.value;
+      if (dexData && dexData[0]?.universe) {
+        this.log(`Fetched HIP-3 dex: ${dex.name} with ${dexData[0].universe.length} markets`);
+        results.push({
+          dexName: dex.name,
+          meta: { universe: dexData[0].universe },
+          assetCtxs: dexData[1] || [],
+        });
       }
     }
 
@@ -394,6 +415,7 @@ export class HyperliquidClient {
       }>;
     };
     assetCtxs: Array<{
+      coin?: string;
       dayNtlVlm: string;
       markPx: string;
       midPx: string;
@@ -412,6 +434,30 @@ export class HyperliquidClient {
     });
     const data = await response.json();
     this.log('spotMetaAndAssetCtxs response:', JSON.stringify(data).slice(0, 500));
+
+    if (!Array.isArray(data) || !data[0] || !data[1]) {
+      this.log('spotMetaAndAssetCtxs returned null/malformed data, falling back to spotMeta + allMids');
+
+      const [meta, mids] = await Promise.all([
+        this.getSpotMeta(),
+        this.getAllMids(),
+      ]);
+
+      return {
+        meta,
+        assetCtxs: meta.universe.map((pair) => {
+          const price = mids[pair.name] ?? '0';
+          return {
+            coin: pair.name,
+            dayNtlVlm: '0',
+            markPx: price,
+            midPx: price,
+            prevDayPx: price,
+          };
+        }),
+      };
+    }
+
     return {
       meta: data[0],
       assetCtxs: data[1],
@@ -1220,41 +1266,47 @@ export class HyperliquidClient {
     const mainState = await this.getUserState(user);
     const dexs = await this.getPerpDexs();
 
-    // Collect positions from all HIP-3 dexes
-    let hip3Errors = 0;
-    for (let i = 1; i < dexs.length; i++) {
-      const dex = dexs[i];
-      if (!dex) continue;
-
-      try {
+    // Collect positions from all HIP-3 dexes (in parallel)
+    const validDexs = dexs.slice(1).filter((d): d is NonNullable<typeof d> => d != null);
+    const dexResults = await Promise.allSettled(
+      validDexs.map(async (dex) => {
         const dexState = await this.getUserState(user, dex.name);
-        if (dexState.assetPositions?.length > 0) {
-          mainState.assetPositions.push(...dexState.assetPositions);
-        }
+        return { dex, dexState };
+      })
+    );
 
-        // For standard accounts, aggregate margin from each dex
-        if (!unified) {
-          const dexMargin = dexState.marginSummary;
-          if (dexMargin) {
-            const safeAdd = (a: string | undefined, b: string | undefined): string => {
-              const va = parseFloat(a ?? '0') || 0;
-              const vb = parseFloat(b ?? '0') || 0;
-              return String(va + vb);
-            };
-            const addToSummary = (summary: { accountValue: string; totalNtlPos: string; totalRawUsd: string; totalMarginUsed: string; withdrawable: string }) => {
-              summary.accountValue = safeAdd(summary.accountValue, dexMargin.accountValue);
-              summary.totalNtlPos = safeAdd(summary.totalNtlPos, dexMargin.totalNtlPos);
-              summary.totalRawUsd = safeAdd(summary.totalRawUsd, dexMargin.totalRawUsd);
-              summary.totalMarginUsed = safeAdd(summary.totalMarginUsed, dexMargin.totalMarginUsed);
-              summary.withdrawable = safeAdd(summary.withdrawable, dexMargin.withdrawable);
-            };
-            addToSummary(mainState.marginSummary);
-            addToSummary(mainState.crossMarginSummary);
-          }
-        }
-      } catch (err) {
+    let hip3Errors = 0;
+    const safeAdd = (a: string | undefined, b: string | undefined): string => {
+      const va = parseFloat(a ?? '0') || 0;
+      const vb = parseFloat(b ?? '0') || 0;
+      return String(va + vb);
+    };
+
+    for (const result of dexResults) {
+      if (result.status === 'rejected') {
         hip3Errors++;
-        this.log(`Failed to fetch state for dex ${dex.name}:`, err instanceof Error ? err.message : String(err));
+        this.log(`Failed to fetch state for HIP-3 dex:`, result.reason instanceof Error ? result.reason.message : String(result.reason));
+        continue;
+      }
+      const { dexState } = result.value;
+      if (dexState.assetPositions?.length > 0) {
+        mainState.assetPositions.push(...dexState.assetPositions);
+      }
+
+      // For standard accounts, aggregate margin from each dex
+      if (!unified) {
+        const dexMargin = dexState.marginSummary;
+        if (dexMargin) {
+          const addToSummary = (summary: { accountValue: string; totalNtlPos: string; totalRawUsd: string; totalMarginUsed: string; withdrawable: string }) => {
+            summary.accountValue = safeAdd(summary.accountValue, dexMargin.accountValue);
+            summary.totalNtlPos = safeAdd(summary.totalNtlPos, dexMargin.totalNtlPos);
+            summary.totalRawUsd = safeAdd(summary.totalRawUsd, dexMargin.totalRawUsd);
+            summary.totalMarginUsed = safeAdd(summary.totalMarginUsed, dexMargin.totalMarginUsed);
+            summary.withdrawable = safeAdd(summary.withdrawable, dexMargin.withdrawable);
+          };
+          addToSummary(mainState.marginSummary);
+          addToSummary(mainState.crossMarginSummary);
+        }
       }
     }
 
@@ -1316,19 +1368,25 @@ export class HyperliquidClient {
     // Fetch main dex orders
     const orders = await this.info.openOrders({ user: user ?? this.address }) as OpenOrder[];
 
-    // Fetch HIP-3 dex orders
+    // Fetch HIP-3 dex orders (in parallel)
     const dexs = await this.getPerpDexs();
-    for (let i = 1; i < dexs.length; i++) {
-      const dex = dexs[i];
-      if (!dex) continue;
-      try {
+    const validDexs = dexs.slice(1).filter((d): d is NonNullable<typeof d> => d != null);
+    const dexResults = await Promise.allSettled(
+      validDexs.map(async (dex) => {
         const dexOrders = await this.info.openOrders({ user: user ?? this.address, dex: dex.name }) as OpenOrder[];
-        if (dexOrders.length > 0) {
-          this.log(`Found ${dexOrders.length} open orders on HIP-3 dex ${dex.name}`);
-          orders.push(...dexOrders);
-        }
-      } catch (err) {
-        this.log(`Failed to fetch open orders for dex ${dex.name}:`, err instanceof Error ? err.message : String(err));
+        return { dex, dexOrders };
+      })
+    );
+
+    for (const result of dexResults) {
+      if (result.status === 'rejected') {
+        this.log('Failed to fetch open orders for HIP-3 dex:', result.reason instanceof Error ? result.reason.message : String(result.reason));
+        continue;
+      }
+      const { dex, dexOrders } = result.value;
+      if (dexOrders.length > 0) {
+        this.log(`Found ${dexOrders.length} open orders on HIP-3 dex ${dex.name}`);
+        orders.push(...dexOrders);
       }
     }
 

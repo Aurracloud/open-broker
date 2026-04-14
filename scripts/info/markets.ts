@@ -59,7 +59,14 @@ async function main() {
     }
 
     // Include HIP-3 markets
+    if (client.isTestnet && includeHip3 && !(filterCoin?.includes(':'))) {
+      console.log('Note: Testnet — HIP-3 dexes not auto-loaded. Use --coin dexName:COIN to view a specific HIP-3 asset.\n');
+    }
     if (includeHip3 || (filterCoin && filterCoin.includes(':'))) {
+      // On testnet, load the specific dex on demand if user specified dex:COIN
+      if (client.isTestnet && filterCoin?.includes(':')) {
+        await client.loadSingleHip3Dex(filterCoin.split(':')[0]);
+      }
       const allPerps = await client.getAllPerpMetas();
       for (const dexData of allPerps) {
         if (!dexData.dexName) continue;

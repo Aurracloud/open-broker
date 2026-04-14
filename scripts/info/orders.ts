@@ -45,6 +45,11 @@ async function main() {
   const lookupAddress = targetAddress?.toLowerCase();
 
   try {
+    // On testnet, load specific HIP-3 dex on demand if filtering by dex:COIN
+    if (client.isTestnet && filterCoin?.includes(':')) {
+      await client.loadSingleHip3Dex(filterCoin.split(':')[0]);
+    }
+
     if (openOnly) {
       // Use the dedicated open orders endpoint
       let openOrders = await client.getOpenOrders(lookupAddress);

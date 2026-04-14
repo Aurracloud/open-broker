@@ -108,6 +108,9 @@ async function main() {
 
   // Fetch HIP-3 perps
   if (args.type === 'all' || args.type === 'hip3') {
+    if (client.isTestnet) {
+      console.log('Note: Testnet — HIP-3 dexes not auto-loaded. Use "dexName:COIN" syntax to load a specific dex.\n');
+    }
     try {
       const allPerpMetas = await client.getAllPerpMetas();
       // Skip index 0 (main dex), process HIP-3 dexs

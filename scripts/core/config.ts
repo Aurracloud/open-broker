@@ -42,6 +42,20 @@ function loadEnvFile(): string | null {
   const verbose = process.env.VERBOSE === '1' || process.env.VERBOSE === 'true';
   process.env.DOTENV_CONFIG_QUIET = 'true';
 
+  // Explicit config path via -c / --config (highest priority — overrides shell env vars)
+  const explicitPath = process.env.OPENBROKER_CONFIG;
+  if (explicitPath) {
+    if (existsSync(explicitPath)) {
+      loadDotenv({ path: explicitPath, override: true });
+      if (verbose) {
+        console.log(`[DEBUG] Loaded config from -c flag: ${explicitPath}`);
+      }
+      return explicitPath;
+    }
+    console.error(`Config file not found: ${explicitPath}`);
+    process.exit(1);
+  }
+
   // Check locations in order of priority
   const locations = [
     { path: LOCAL_ENV_PATH, name: 'local (.env)' },
@@ -124,6 +138,10 @@ export function loadConfig(): OpenBrokerConfig {
   // Determine if this is an API wallet setup
   const isApiWallet = accountAddress !== undefined && accountAddress !== walletAddress;
 
+  // Vault address — only for vault trading (ERC4626 contracts / native vaults via CoreWriter).
+  // Standard API wallets (approved via approveAgent) do NOT need this.
+  const vaultAddress = process.env.HYPERLIQUID_VAULT_ADDRESS?.toLowerCase();
+
   return {
     baseUrl,
     privateKey: privateKey as `0x${string}`,
@@ -134,6 +152,7 @@ export function loadConfig(): OpenBrokerConfig {
     builderAddress,
     builderFee,
     slippageBps,
+    vaultAddress,
   };
 }
 

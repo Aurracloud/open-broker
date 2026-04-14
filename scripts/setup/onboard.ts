@@ -12,8 +12,19 @@ const OPEN_BROKER_BUILDER_ADDRESS = '0xbb67021fA3e62ab4DA985bb5a55c5c1884381068'
 const OPENBROKER_URL = process.env.OPENBROKER_URL || 'https://openbroker.dev';
 
 // Global config directory: ~/.openbroker/
-const CONFIG_DIR = path.join(homedir(), '.openbroker');
-const CONFIG_PATH = path.join(CONFIG_DIR, '.env');
+const GLOBAL_CONFIG_DIR = path.join(homedir(), '.openbroker');
+const GLOBAL_CONFIG_PATH = path.join(GLOBAL_CONFIG_DIR, '.env');
+
+// Parse CLI flags
+const cliArgs = process.argv.slice(2);
+const useTestnet = cliArgs.includes('--testnet') || process.env.HYPERLIQUID_NETWORK === 'testnet';
+const accountAddressIdx = cliArgs.indexOf('--account-address');
+const cliAccountAddress = accountAddressIdx !== -1 ? cliArgs[accountAddressIdx + 1] : undefined;
+const configPathIdx = cliArgs.indexOf('-c') !== -1 ? cliArgs.indexOf('-c') : cliArgs.indexOf('--config');
+const cliConfigPath = configPathIdx !== -1 ? cliArgs[configPathIdx + 1] : process.env.OPENBROKER_CONFIG;
+
+const CONFIG_PATH = cliConfigPath ? path.resolve(cliConfigPath) : GLOBAL_CONFIG_PATH;
+const CONFIG_DIR = path.dirname(CONFIG_PATH);
 
 interface OnboardResult {
   success: boolean;
@@ -54,7 +65,7 @@ const POLL_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 
 async function pollForApproval(agentAddress: string): Promise<string | null> {
   const startTime = Date.now();
-  const statusUrl = `${OPENBROKER_URL}/api/approve-status?agent=${agentAddress}`;
+  const statusUrl = `${OPENBROKER_URL}/api/approve-status?agent=${agentAddress}${useTestnet ? '&network=testnet' : ''}`;
 
   let dotCount = 0;
 
@@ -86,8 +97,9 @@ async function pollForApproval(agentAddress: string): Promise<string | null> {
 }
 
 async function verifyBuilderFee(masterAddress: string): Promise<boolean> {
+  const apiUrl = useTestnet ? 'https://api.hyperliquid-testnet.xyz/info' : 'https://api.hyperliquid.xyz/info';
   try {
-    const response = await fetch('https://api.hyperliquid.xyz/info', {
+    const response = await fetch(apiUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -104,8 +116,9 @@ async function verifyBuilderFee(masterAddress: string): Promise<boolean> {
 }
 
 function buildApiWalletEnvContent(privateKey: string, masterAddress: string): string {
+  const network = useTestnet ? 'testnet' : 'mainnet';
   return `# OpenBroker Configuration (API Wallet)
-# Location: ~/.openbroker/.env
+# Location: ${CONFIG_PATH}
 # WARNING: Keep this file secret! Never share it!
 
 # API wallet private key (can trade, cannot withdraw)
@@ -115,7 +128,7 @@ HYPERLIQUID_PRIVATE_KEY=${privateKey}
 HYPERLIQUID_ACCOUNT_ADDRESS=${masterAddress}
 
 # Network: mainnet or testnet
-HYPERLIQUID_NETWORK=mainnet
+HYPERLIQUID_NETWORK=${network}
 `;
 }
 
@@ -132,7 +145,7 @@ async function setupApiWallet(): Promise<OnboardResult> {
   ensureConfigDir();
 
   // Build the approval URL
-  const approveUrl = `${OPENBROKER_URL}/approve?agent=${apiAccount.address}`;
+  const approveUrl = `${OPENBROKER_URL}/approve?agent=${apiAccount.address}${useTestnet ? '&network=testnet' : ''}`;
 
   console.log(`✅ Config directory ready: ${CONFIG_DIR}\n`);
 
@@ -141,9 +154,15 @@ async function setupApiWallet(): Promise<OnboardResult> {
   console.log('Your API wallet needs to be authorized by a master wallet.');
   console.log('Open this URL in your browser and connect your master wallet:\n');
   console.log(`  ${approveUrl}\n`);
-  console.log('The master wallet will sign two transactions:');
-  console.log('  1. ApproveAgent  — authorizes this API wallet to trade');
-  console.log('  2. ApproveBuilderFee — approves the 1 bps builder fee\n');
+  if (useTestnet) {
+    console.log('The master wallet will sign one transaction:');
+    console.log('  1. ApproveAgent  — authorizes this API wallet to trade');
+    console.log('  (Builder fee approval is skipped on testnet)\n');
+  } else {
+    console.log('The master wallet will sign two transactions:');
+    console.log('  1. ApproveAgent  — authorizes this API wallet to trade');
+    console.log('  2. ApproveBuilderFee — approves the 1 bps builder fee\n');
+  }
 
   // Poll for approval
   const masterAddress = await pollForApproval(apiAccount.address);
@@ -175,14 +194,18 @@ HYPERLIQUID_NETWORK=mainnet
 
   console.log(`\n✅ Master wallet detected: ${masterAddress}`);
 
-  // Verify on-chain
-  console.log('   Verifying builder fee approval...');
-  const feeApproved = await verifyBuilderFee(masterAddress);
+  // Verify builder fee on-chain (skip on testnet)
+  if (!useTestnet) {
+    console.log('   Verifying builder fee approval...');
+    const feeApproved = await verifyBuilderFee(masterAddress);
 
-  if (feeApproved) {
-    console.log('   ✅ Builder fee: approved on-chain');
+    if (feeApproved) {
+      console.log('   ✅ Builder fee: approved on-chain');
+    } else {
+      console.log('   ⚠️  Builder fee not yet confirmed on-chain (may take a moment)');
+    }
   } else {
-    console.log('   ⚠️  Builder fee not yet confirmed on-chain (may take a moment)');
+    console.log('   (Builder fee verification skipped on testnet)');
   }
 
   // Save complete config
@@ -225,8 +248,30 @@ HYPERLIQUID_NETWORK=mainnet
 // ── Main ──
 
 async function main(): Promise<OnboardResult> {
+  if (cliArgs.includes('--help') || cliArgs.includes('-h')) {
+    console.log(`
+OpenBroker Setup
+
+Usage: openbroker setup [options]
+
+Options:
+  -c, --config <path>       Save config to a custom path (default: ~/.openbroker/.env)
+  --testnet                 Configure for testnet
+  --account-address <addr>  Set HYPERLIQUID_ACCOUNT_ADDRESS (for API wallet / vault trading)
+  --help                    Show this help
+
+Examples:
+  openbroker setup                                                    # Interactive → ~/.openbroker/.env
+  openbroker setup -c .env --testnet                                  # Write to ./.env for testnet
+  openbroker setup -c ./testnet.env --testnet --account-address 0x... # API wallet config
+`);
+    process.exit(0);
+  }
+
   console.log('OpenBroker - One-Command Setup');
   console.log('==============================\n');
+  if (cliConfigPath) console.log(`Config will be saved to: ${CONFIG_PATH}\n`);
+  if (useTestnet) console.log('Network: testnet\n');
   console.log('This will: 1) Create wallet  2) Save config  3) Approve builder fee\n');
 
   // Check if config already exists
@@ -253,7 +298,7 @@ async function main(): Promise<OnboardResult> {
       console.log(`   API Wallet: ${account.address}`);
       console.log(`   Master account address is missing — re-polling for approval...\n`);
 
-      const approveUrl = `${OPENBROKER_URL}/approve?agent=${account.address}`;
+      const approveUrl = `${OPENBROKER_URL}/approve?agent=${account.address}${useTestnet ? '&network=testnet' : ''}`;
       console.log(`   If not yet approved, visit: ${approveUrl}\n`);
 
       const masterAddress = await pollForApproval(account.address);
@@ -380,51 +425,57 @@ async function main(): Promise<OnboardResult> {
   console.log('Step 2/3: Creating config...');
   ensureConfigDir();
 
+  const network = useTestnet ? 'testnet' : 'mainnet';
+  const accountLine = cliAccountAddress ? `\n# Master/vault account address\nHYPERLIQUID_ACCOUNT_ADDRESS=${cliAccountAddress}\n` : '';
   const envContent = `# OpenBroker Configuration
-# Location: ~/.openbroker/.env
+# Location: ${CONFIG_PATH}
 # WARNING: Keep this file secret! Never share it!
 
 # Your wallet private key
 HYPERLIQUID_PRIVATE_KEY=${privateKey}
-
+${accountLine}
 # Network: mainnet or testnet
-HYPERLIQUID_NETWORK=mainnet
+HYPERLIQUID_NETWORK=${network}
 `;
 
   fs.writeFileSync(CONFIG_PATH, envContent, { mode: 0o600 });
   console.log(`✅ Config saved to: ${CONFIG_PATH}\n`);
 
-  // Approve builder fee (automatic - no user action needed)
-  console.log('Step 3/3: Approving builder fee...');
-  console.log('(This is automatic, and required for trading)\n');
+  // Approve builder fee (automatic - no user action needed; skip on testnet)
+  if (useTestnet) {
+    console.log('Step 3/3: Skipping builder fee approval (testnet)\n');
+  } else {
+    console.log('Step 3/3: Approving builder fee...');
+    console.log('(This is automatic, and required for trading)\n');
 
-  try {
-    // Import and run approve-builder inline
-    const { getClient } = await import('../core/client.js');
-    const client = getClient();
+    try {
+      // Import and run approve-builder inline
+      const { getClient } = await import('../core/client.js');
+      const client = getClient();
 
-    console.log(`   Account: ${client.address}`);
-    console.log(`   Builder: ${OPEN_BROKER_BUILDER_ADDRESS}`);
+      console.log(`   Account: ${client.address}`);
+      console.log(`   Builder: ${OPEN_BROKER_BUILDER_ADDRESS}`);
 
-    // Check if already approved
-    const currentApproval = await client.getMaxBuilderFee(client.address, OPEN_BROKER_BUILDER_ADDRESS);
+      // Check if already approved
+      const currentApproval = await client.getMaxBuilderFee(client.address, OPEN_BROKER_BUILDER_ADDRESS);
 
-    if (currentApproval) {
-      console.log(`\n✅ Builder fee already approved (${currentApproval})`);
-    } else {
-      console.log('\n   Sending approval transaction...');
-      const result = await client.approveBuilderFee('0.1%', OPEN_BROKER_BUILDER_ADDRESS);
-
-      if (result.status === 'ok') {
-        console.log('✅ Builder fee approved successfully!');
+      if (currentApproval) {
+        console.log(`\n✅ Builder fee already approved (${currentApproval})`);
       } else {
-        console.log(`⚠️  Approval may have failed: ${result.response}`);
-        console.log('   You can retry later: openbroker approve-builder');
+        console.log('\n   Sending approval transaction...');
+        const result = await client.approveBuilderFee('0.1%', OPEN_BROKER_BUILDER_ADDRESS);
+
+        if (result.status === 'ok') {
+          console.log('✅ Builder fee approved successfully!');
+        } else {
+          console.log(`⚠️  Approval may have failed: ${result.response}`);
+          console.log('   You can retry later: openbroker approve-builder');
+        }
       }
+    } catch (error) {
+      console.log(`⚠️  Could not approve builder fee: ${error}`);
+      console.log('   You can retry later: openbroker approve-builder');
     }
-  } catch (error) {
-    console.log(`⚠️  Could not approve builder fee: ${error}`);
-    console.log('   You can retry later: openbroker approve-builder');
   }
 
   // Final summary

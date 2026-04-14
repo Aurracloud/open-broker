@@ -71,11 +71,13 @@ function parseSetFlags(rawArgs: string[]): Record<string, unknown> {
       }
       const key = pair.slice(0, eqIdx);
       const raw = pair.slice(eqIdx + 1);
+      const isHexLike = /^0x[0-9a-fA-F]+$/.test(raw);
+      const isDecimalLike = /^-?(?:\d+|\d+\.\d+|\.\d+)$/.test(raw);
 
       // Auto-parse numbers and booleans
       if (raw === 'true') config[key] = true;
       else if (raw === 'false') config[key] = false;
-      else if (raw !== '' && !isNaN(Number(raw))) config[key] = Number(raw);
+      else if (!isHexLike && isDecimalLike) config[key] = Number(raw);
       else config[key] = raw;
 
       i++; // skip the value
@@ -115,6 +117,12 @@ async function runCommand(args: Record<string, string | boolean>, positional: st
   const useWebSocket = args['no-ws'] !== true;
   const pollIntervalMs = args.poll ? parseInt(String(args.poll), 10) : undefined;
   const id = args.id ? String(args.id) : undefined;
+
+  if (args.testnet === true) {
+    process.env.HYPERLIQUID_NETWORK = 'testnet';
+  } else if (args.mainnet === true) {
+    process.env.HYPERLIQUID_NETWORK = 'mainnet';
+  }
 
   if (pollIntervalMs !== undefined && (isNaN(pollIntervalMs) || pollIntervalMs < 1000)) {
     console.error('Error: --poll must be at least 1000ms');

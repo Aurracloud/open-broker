@@ -1,6 +1,6 @@
 {
   "name": "openbroker",
-  "version": "1.0.81",
+  "version": "1.1.5",
   "description": "Hyperliquid trading CLI - execute orders, manage positions, and run trading strategies",
   "type": "module",
   "bin": {

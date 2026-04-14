@@ -184,6 +184,10 @@ async function main() {
   console.log('==================================\n');
   console.log(`Threshold: ${threshold}% annualized | Scope: ${mainOnly ? 'main only' : hip3Only ? 'HIP-3 only' : 'all dexes'}\n`);
 
+  if (client.isTestnet && !mainOnly) {
+    console.log('Note: Testnet — HIP-3 dexes not auto-loaded. Only main perps will be scanned.\n');
+  }
+
   const options = { threshold, mainOnly, hip3Only, topN };
 
   const runScan = async () => {

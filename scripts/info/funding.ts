@@ -56,7 +56,14 @@ async function main() {
     }
 
     // Include HIP-3 dex assets
+    if (client.isTestnet && (includeHip3 || showAll) && !(filterCoin?.includes(':'))) {
+      console.log('Note: Testnet — HIP-3 dexes not auto-loaded. Use --coin dexName:COIN to view a specific HIP-3 asset.\n');
+    }
     if (includeHip3 || showAll || (filterCoin && filterCoin.includes(':'))) {
+      // On testnet, load the specific dex on demand if user specified dex:COIN
+      if (client.isTestnet && filterCoin?.includes(':')) {
+        await client.loadSingleHip3Dex(filterCoin.split(':')[0]);
+      }
       const allPerps = await client.getAllPerpMetas();
       for (const dexData of allPerps) {
         if (!dexData.dexName) continue; // Skip main dex (already loaded)

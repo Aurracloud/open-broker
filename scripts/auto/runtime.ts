@@ -624,6 +624,9 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
       audit.recordError('websocket_setup', error);
+      if (verbose && error.stack) {
+        log.debug(`WebSocket setup stack: ${error.stack}`);
+      }
       log.warn(`WebSocket setup failed: ${error.message} — using REST polling only`);
       ws = null;
       wsConnected = false;

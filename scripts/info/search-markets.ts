@@ -122,6 +122,14 @@ async function main() {
 
   // Search HIP-3 perps
   if (args.type === 'all' || args.type === 'hip3') {
+    if (client.isTestnet) {
+      // On testnet, load specific dex if query is "dex:COIN" format
+      if (args.query.includes(':')) {
+        await client.loadSingleHip3Dex(args.query.split(':')[0]);
+      } else {
+        console.log('  (Testnet: HIP-3 dexes not auto-loaded. Use "dexName:COIN" to search a specific dex.)\n');
+      }
+    }
     try {
       const allPerpMetas = await client.getAllPerpMetas();
       // Skip index 0 (main dex), process HIP-3 dexs

@@ -31,6 +31,10 @@ export class HyperliquidClient {
   private perpDexsCache: Array<{ name: string; fullName: string; deployer: string } | null> | null = null;
   /** Whether HIP-3 assets have been loaded into maps */
   private hip3Loaded: boolean = false;
+  /** Whether API wallet setup has been validated */
+  private apiWalletValidated: boolean = false;
+  /** Set of HIP-3 dex names that have been loaded (for testnet on-demand loading) */
+  private loadedHip3Dexes: Set<string> = new Set();
   /** HIP-3 assets that have had isolated margin set this session */
   private hip3IsolatedSet: Set<string> = new Set();
   /** Cached maxLeverage for HIP-3 assets */
@@ -39,6 +43,8 @@ export class HyperliquidClient {
   private accountMode: string | null = null;
   /** Spot asset index map: coin name → 10000 + spotMeta.universe[i].index */
   private spotAssetMap: Map<string, number> = new Map();
+  /** Spot market key map: coin name → pair.name (e.g. "@230", "PURR/USDC") */
+  private spotPairNameMap: Map<string, string> = new Map();
   /** Spot szDecimals map: coin name → base token szDecimals */
   private spotSzDecimalsMap: Map<string, number> = new Map();
   /** Whether spot metadata has been loaded */
@@ -51,18 +57,118 @@ export class HyperliquidClient {
     this.verbose = process.env.VERBOSE === '1' || process.env.VERBOSE === 'true';
 
     // Initialize SDK clients
-    this.transport = new HttpTransport({ isMainnet: isMainnet() });
+    this.transport = new HttpTransport({ isTestnet: !isMainnet() });
     this.info = new InfoClient({ transport: this.transport });
     this.exchange = new ExchangeClient({
       transport: this.transport,
       wallet: this.account,
-      isMainnet: isMainnet(),
     });
+
+    this.log(
+      'Client init:',
+      JSON.stringify({
+        network: isMainnet() ? 'mainnet' : 'testnet',
+        apiUrl: this.config.baseUrl,
+        accountAddress: this.config.accountAddress,
+        walletAddress: this.config.walletAddress,
+        isApiWallet: this.config.isApiWallet,
+        isReadOnly: this.config.isReadOnly,
+      })
+    );
   }
 
   private log(...args: unknown[]) {
     if (this.verbose) {
       console.log('[DEBUG]', ...args);
+    }
+  }
+
+  private describeError(error: unknown): string {
+    if (!(error instanceof Error)) return String(error);
+
+    const response = (error as Error & { response?: Response }).response;
+    const body = (error as Error & { body?: string }).body;
+    const cause = (error as Error & { cause?: unknown }).cause;
+    const parts = [error.message];
+
+    if (response) {
+      parts.push(`status=${response.status} ${response.statusText}`.trim());
+    }
+
+    if (body) {
+      parts.push(`body=${body.length > 300 ? `${body.slice(0, 300)}...` : body}`);
+    }
+
+    if (cause instanceof Error && cause.message && cause.message !== error.message) {
+      parts.push(`cause=${cause.message}`);
+    } else if (cause && !(cause instanceof Error)) {
+      parts.push(`cause=${String(cause)}`);
+    }
+
+    return parts.join(' | ');
+  }
+
+  /** Retry an async operation on transient failures (fetch failed, ECONNRESET, etc.) */
+  private async withRetry<T>(fn: () => Promise<T>, label: string, maxRetries = 3): Promise<T> {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        return await fn();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const isTransient = /fetch failed|ECONNRESET|ETIMEDOUT|ENOTFOUND|socket hang up/i.test(message);
+        if (!isTransient || attempt === maxRetries) throw error;
+        const delay = attempt * 1000; // 1s, 2s, 3s
+        this.log(`${label} attempt ${attempt}/${maxRetries} failed (${message}), retrying in ${delay}ms...`);
+        await new Promise(r => setTimeout(r, delay));
+      }
+    }
+    throw new Error('unreachable');
+  }
+
+  private getTransportContext(label: string): string {
+    return JSON.stringify({
+      label,
+      network: isMainnet() ? 'mainnet' : 'testnet',
+      apiUrl: this.config.baseUrl,
+      accountAddress: this.config.accountAddress,
+      walletAddress: this.config.walletAddress,
+      isApiWallet: this.config.isApiWallet,
+      isReadOnly: this.config.isReadOnly,
+      verbose: this.verbose,
+    });
+  }
+
+  private async postInfo<T>(payload: Record<string, unknown>, label: string): Promise<T> {
+    const baseUrl = isMainnet()
+      ? 'https://api.hyperliquid.xyz'
+      : 'https://api.hyperliquid-testnet.xyz';
+
+    const response = await this.withRetry(async () => {
+      try {
+        return await fetch(baseUrl + '/info', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`${label} request failed before response: ${message}`);
+      }
+    }, label);
+
+    const text = await response.text();
+    if (!response.ok) {
+      const snippet = text.length > 300 ? `${text.slice(0, 300)}...` : text;
+      throw new Error(
+        `${label} failed: HTTP ${response.status} ${response.statusText}${snippet ? ` | body=${snippet}` : ''}`
+      );
+    }
+
+    try {
+      return JSON.parse(text) as T;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`${label} returned invalid JSON: ${message}`);
     }
   }
 
@@ -101,12 +207,34 @@ export class HyperliquidClient {
     return this.config.isReadOnly;
   }
 
-  /** Throw error if trying to trade in read-only mode */
-  private requireTrading(): void {
+  /** Whether connected to testnet (HIP-3 dexes not auto-loaded) */
+  get isTestnet(): boolean {
+    return !isMainnet();
+  }
+
+  /**
+   * Returns vaultAddress param for SDK exchange calls.
+   * Only used for vault trading (HYPERLIQUID_VAULT_ADDRESS set explicitly).
+   * Standard API wallets (agents) do NOT need this — the API maps agent → master automatically.
+   */
+  private get vaultParam(): { vaultAddress: `0x${string}` } | Record<string, never> {
+    if (this.config.vaultAddress) {
+      return { vaultAddress: this.config.vaultAddress as `0x${string}` };
+    }
+    return {};
+  }
+
+  /** Throw error if trying to trade in read-only mode. Validates API wallet on first call. */
+  private async requireTrading(): Promise<void> {
     if (this.config.isReadOnly) {
       throw new Error(
         'Trading not available. Run "openbroker setup" to configure your wallet.'
       );
+    }
+    // One-time API wallet validation on first trade attempt
+    if (this.config.isApiWallet && !this.apiWalletValidated) {
+      this.apiWalletValidated = true;
+      await this.validateApiWalletSetup();
     }
   }
 
@@ -116,7 +244,16 @@ export class HyperliquidClient {
     if (this.meta) return this.meta;
 
     this.log('Fetching metaAndAssetCtxs...');
-    const response = await this.info.metaAndAssetCtxs();
+    let response;
+    try {
+      response = await this.withRetry(() => this.info.metaAndAssetCtxs(), 'metaAndAssetCtxs');
+    } catch (error) {
+      this.log('metaAndAssetCtxs failure context:', this.getTransportContext('metaAndAssetCtxs'));
+      if (error instanceof Error && error.stack) {
+        this.log('metaAndAssetCtxs stack:', error.stack);
+      }
+      throw new Error(`metaAndAssetCtxs failed: ${this.describeError(error)}`);
+    }
     this.log('metaAndAssetCtxs response:', JSON.stringify(response, null, 2).slice(0, 500) + '...');
 
     this.meta = {
@@ -145,39 +282,57 @@ export class HyperliquidClient {
    * Asset index formula: 100000 + dexIdx * 10000 + assetIdx
    * Coins are keyed as "dexName:COIN" (e.g., "xyz:CL")
    */
-  /** Max HIP-3 dexes to load on testnet (testnet has many junk/test dexes) */
-  private static readonly TESTNET_HIP3_MAX = 20;
+  /** Max concurrent HIP-3 API requests to avoid rate limiting */
+  private static readonly HIP3_CONCURRENCY = 5;
 
+  /**
+   * Like Promise.allSettled but with a concurrency limit.
+   * Processes tasks in batches to avoid hitting API rate limits.
+   */
+  private async batchSettled<T>(tasks: Array<() => Promise<T>>): Promise<PromiseSettledResult<T>[]> {
+    const results: PromiseSettledResult<T>[] = [];
+    const concurrency = HyperliquidClient.HIP3_CONCURRENCY;
+    for (let i = 0; i < tasks.length; i += concurrency) {
+      const batch = tasks.slice(i, i + concurrency);
+      const batchResults = await Promise.allSettled(batch.map(fn => fn()));
+      results.push(...batchResults);
+    }
+    return results;
+  }
+
+  /**
+   * Load HIP-3 perp dex assets into the asset/szDecimals maps.
+   * On testnet: skips auto-loading (too many junk dexes). Use loadSingleHip3Dex() on demand.
+   * On mainnet: loads all dexes with concurrency limit.
+   */
   private async loadHip3Assets(): Promise<void> {
     try {
       const dexs = await this.getPerpDexs();
-      const mainnet = isMainnet();
-      const baseUrl = mainnet
-        ? 'https://api.hyperliquid.xyz'
-        : 'https://api.hyperliquid-testnet.xyz';
 
-      // Build list of valid dexes to load
+      // On testnet, skip auto-loading — too many junk dexes cause rate limiting.
+      // Users can reference specific dexes (e.g., "felix:BTC") which triggers on-demand loading.
+      if (!isMainnet()) {
+        const dexCount = dexs.filter(d => d != null).length - 1; // exclude null at index 0
+        if (dexCount > 0) {
+          this.log(`Testnet: skipping auto-load of ${dexCount} HIP-3 dexes. Use "dexName:COIN" to load a specific dex on demand.`);
+        }
+        return;
+      }
+
+      // Mainnet: load all dexes
       const dexEntries: Array<{ dex: { name: string }; dexIdx: number }> = [];
       for (let dexIdx = 1; dexIdx < dexs.length; dexIdx++) {
         const dex = dexs[dexIdx];
         if (dex) dexEntries.push({ dex, dexIdx });
       }
 
-      // Cap on testnet to avoid loading hundreds of junk dexes
-      if (!mainnet && dexEntries.length > HyperliquidClient.TESTNET_HIP3_MAX) {
-        this.log(`Testnet: loading first ${HyperliquidClient.TESTNET_HIP3_MAX} of ${dexEntries.length} HIP-3 dexes (use mainnet for full list)`);
-        dexEntries.length = HyperliquidClient.TESTNET_HIP3_MAX;
-      }
-
-      // Fetch all dexes in parallel
-      const results = await Promise.allSettled(
-        dexEntries.map(async ({ dex, dexIdx }) => {
-          const dexResponse = await fetch(baseUrl + '/info', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ type: 'metaAndAssetCtxs', dex: dex.name }),
-          });
-          return { dex, dexIdx, data: await dexResponse.json() };
+      const results = await this.batchSettled(
+        dexEntries.map(({ dex, dexIdx }) => async () => {
+          const data = await this.postInfo<unknown>(
+            { type: 'metaAndAssetCtxs', dex: dex.name },
+            `metaAndAssetCtxs(${dex.name})`
+          );
+          return { dex, dexIdx, data };
         })
       );
 
@@ -187,47 +342,96 @@ export class HyperliquidClient {
           continue;
         }
         const { dex, dexIdx, data: dexData } = result.value;
-        if (dexData && dexData[0]?.universe) {
-          const universe = dexData[0].universe as Array<{ name: string; szDecimals: number; maxLeverage: number; onlyIsolated?: boolean }>;
-          this.log(`Loading HIP-3 dex: ${dex.name} with ${universe.length} markets`);
-
-          universe.forEach((asset, assetIdx) => {
-            const coinName = asset.name;
-            const localName = coinName.startsWith(dex.name + ':') ? coinName.slice(dex.name.length + 1) : coinName;
-            const globalIndex = 100000 + dexIdx * 10000 + assetIdx;
-
-            this.assetMap.set(coinName, globalIndex);
-            this.szDecimalsMap.set(coinName, asset.szDecimals);
-            this.coinDexMap.set(coinName, { dexName: dex.name, dexIdx, localName });
-            if (asset.maxLeverage) this.hip3MaxLeverageMap.set(coinName, asset.maxLeverage);
-          });
-        }
+        this.registerHip3Dex(dex.name, dexIdx, dexData);
       }
     } catch (e) {
       this.log('Failed to load HIP-3 assets:', e);
     }
   }
 
+  /**
+   * Load a single HIP-3 dex by name (on-demand, e.g. when user references "felix:BTC").
+   * No-op if already loaded.
+   */
+  async loadSingleHip3Dex(dexName: string): Promise<boolean> {
+    if (this.loadedHip3Dexes.has(dexName)) return true;
+
+    const dexs = await this.getPerpDexs();
+    const dexIdx = dexs.findIndex(d => d?.name === dexName);
+    if (dexIdx < 1) {
+      this.log(`HIP-3 dex "${dexName}" not found in perpDexs list`);
+      return false;
+    }
+
+    try {
+      this.log(`On-demand loading HIP-3 dex: ${dexName}`);
+      const data = await this.postInfo<unknown>(
+        { type: 'metaAndAssetCtxs', dex: dexName },
+        `metaAndAssetCtxs(${dexName})`
+      );
+      this.registerHip3Dex(dexName, dexIdx, data);
+      return true;
+    } catch (e) {
+      this.log(`Failed to load HIP-3 dex ${dexName}:`, e);
+      return false;
+    }
+  }
+
+  /**
+   * Get HIP-3 dexes to iterate over for bulk queries.
+   * Mainnet: all dexes. Testnet: only explicitly loaded dexes.
+   */
+  private async getIterableHip3Dexs(): Promise<Array<{ name: string; fullName: string; deployer: string }>> {
+    const dexs = await this.getPerpDexs();
+    const all = dexs.slice(1).filter((d): d is NonNullable<typeof d> => d != null);
+    if (isMainnet()) return all;
+    // Testnet: only return dexes that have been explicitly loaded
+    return all.filter(d => this.loadedHip3Dexes.has(d.name));
+  }
+
+  /** Register a fetched HIP-3 dex's assets into lookup maps */
+  private registerHip3Dex(dexName: string, dexIdx: number, dexData: any): void {
+    if (dexData && dexData[0]?.universe) {
+      const universe = dexData[0].universe as Array<{ name: string; szDecimals: number; maxLeverage: number; onlyIsolated?: boolean }>;
+      this.log(`Loading HIP-3 dex: ${dexName} with ${universe.length} markets`);
+
+      universe.forEach((asset, assetIdx) => {
+        const coinName = asset.name;
+        const localName = coinName.startsWith(dexName + ':') ? coinName.slice(dexName.length + 1) : coinName;
+        const globalIndex = 100000 + dexIdx * 10000 + assetIdx;
+
+        this.assetMap.set(coinName, globalIndex);
+        this.szDecimalsMap.set(coinName, asset.szDecimals);
+        this.coinDexMap.set(coinName, { dexName, dexIdx, localName });
+        if (asset.maxLeverage) this.hip3MaxLeverageMap.set(coinName, asset.maxLeverage);
+      });
+    }
+    this.loadedHip3Dexes.add(dexName);
+  }
+
   async getAllMids(): Promise<Record<string, string>> {
     this.log('Fetching allMids...');
-    const response = await this.info.allMids() as Record<string, string>;
-
-    // Also fetch HIP-3 dex mids (in parallel)
+    let response: Record<string, string>;
     try {
-      const dexs = await this.getPerpDexs();
-      const baseUrl = isMainnet()
-        ? 'https://api.hyperliquid.xyz'
-        : 'https://api.hyperliquid-testnet.xyz';
+      response = await this.withRetry(() => this.info.allMids(), 'allMids') as Record<string, string>;
+    } catch (error) {
+      this.log('allMids failure context:', this.getTransportContext('allMids'));
+      if (error instanceof Error && error.stack) {
+        this.log('allMids stack:', error.stack);
+      }
+      throw new Error(`allMids failed: ${this.describeError(error)}`);
+    }
 
-      const validDexs = dexs.slice(1).filter((d): d is NonNullable<typeof d> => d != null);
-      const results = await Promise.allSettled(
-        validDexs.map(async (dex) => {
-          const dexResponse = await fetch(baseUrl + '/info', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ type: 'allMids', dex: dex.name }),
-          });
-          return { dex, mids: await dexResponse.json() as Record<string, string> };
+    // Also fetch HIP-3 dex mids (in parallel; testnet: only loaded dexes)
+    try {
+      const validDexs = await this.getIterableHip3Dexs();
+      const results = await this.batchSettled(
+        validDexs.map((dex) => async () => {
+          const mids = await this.postInfo<Record<string, string>>(
+            { type: 'allMids', dex: dex.name },
+            `allMids(${dex.name})`
+          );
+          return { dex, mids };
         })
       );
 
@@ -259,16 +463,11 @@ export class HyperliquidClient {
     if (this.perpDexsCache) return this.perpDexsCache;
 
     this.log('Fetching perpDexs...');
-    const baseUrl = isMainnet()
-      ? 'https://api.hyperliquid.xyz'
-      : 'https://api.hyperliquid-testnet.xyz';
-
-    const response = await fetch(baseUrl + '/info', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: 'perpDexs' }),
-    });
-    const data = await response.json();
+    const data = await this.postInfo<Array<{
+      name: string;
+      fullName: string;
+      deployer: string;
+    } | null>>({ type: 'perpDexs' }, 'perpDexs');
     this.log('perpDexs response:', JSON.stringify(data).slice(0, 500));
     this.perpDexsCache = data;
     return data;
@@ -292,10 +491,6 @@ export class HyperliquidClient {
     }>;
   }>> {
     this.log('Fetching all perp markets...');
-    const baseUrl = isMainnet()
-      ? 'https://api.hyperliquid.xyz'
-      : 'https://api.hyperliquid-testnet.xyz';
-
     const results: Array<{
       dexName: string | null;
       meta: { universe: Array<{ name: string; szDecimals: number; maxLeverage: number; onlyIsolated?: boolean }> };
@@ -311,12 +506,7 @@ export class HyperliquidClient {
     }> = [];
 
     // Get main dex data (no dex parameter)
-    const mainResponse = await fetch(baseUrl + '/info', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: 'metaAndAssetCtxs' }),
-    });
-    const mainData = await mainResponse.json();
+    const mainData = await this.postInfo<any>({ type: 'metaAndAssetCtxs' }, 'metaAndAssetCtxs(main)');
     this.log('Main dex data fetched');
 
     results.push({
@@ -325,18 +515,16 @@ export class HyperliquidClient {
       assetCtxs: mainData[1],
     });
 
-    // Get HIP-3 dex names and fetch all in parallel
-    const dexs = await this.getPerpDexs();
-    const validDexs = dexs.slice(1).filter((d): d is NonNullable<typeof d> => d != null);
+    // Get HIP-3 dex names and fetch all in parallel (testnet: only loaded dexes)
+    const validDexs = await this.getIterableHip3Dexs();
 
-    const hip3Results = await Promise.allSettled(
-      validDexs.map(async (dex) => {
-        const dexResponse = await fetch(baseUrl + '/info', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ type: 'metaAndAssetCtxs', dex: dex.name }),
-        });
-        return { dex, data: await dexResponse.json() };
+    const hip3Results = await this.batchSettled(
+      validDexs.map((dex) => async () => {
+        const data = await this.postInfo<any>(
+          { type: 'metaAndAssetCtxs', dex: dex.name },
+          `metaAndAssetCtxs(${dex.name})`
+        );
+        return { dex, data };
       })
     );
 
@@ -380,16 +568,23 @@ export class HyperliquidClient {
     }>;
   }> {
     this.log('Fetching spotMeta...');
-    const baseUrl = isMainnet()
-      ? 'https://api.hyperliquid.xyz'
-      : 'https://api.hyperliquid-testnet.xyz';
-
-    const response = await fetch(baseUrl + '/info', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: 'spotMeta' }),
-    });
-    const data = await response.json();
+    const data = await this.postInfo<{
+      tokens: Array<{
+        name: string;
+        szDecimals: number;
+        weiDecimals: number;
+        index: number;
+        tokenId: string;
+        isCanonical: boolean;
+        fullName: string | null;
+      }>;
+      universe: Array<{
+        name: string;
+        tokens: [number, number];
+        index: number;
+        isCanonical: boolean;
+      }>;
+    }>({ type: 'spotMeta' }, 'spotMeta');
     this.log('spotMeta response:', JSON.stringify(data).slice(0, 500));
     return data;
   }
@@ -423,16 +618,10 @@ export class HyperliquidClient {
     }>;
   }> {
     this.log('Fetching spotMetaAndAssetCtxs...');
-    const baseUrl = isMainnet()
-      ? 'https://api.hyperliquid.xyz'
-      : 'https://api.hyperliquid-testnet.xyz';
-
-    const response = await fetch(baseUrl + '/info', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: 'spotMetaAndAssetCtxs' }),
-    });
-    const data = await response.json();
+    const data = await this.postInfo<unknown>(
+      { type: 'spotMetaAndAssetCtxs' },
+      'spotMetaAndAssetCtxs'
+    );
     this.log('spotMetaAndAssetCtxs response:', JSON.stringify(data).slice(0, 500));
 
     if (!Array.isArray(data) || !data[0] || !data[1]) {
@@ -499,9 +688,12 @@ export class HyperliquidClient {
         }
 
         this.spotAssetMap.set(baseToken.name, spotAssetIndex);
+        this.spotPairNameMap.set(baseToken.name, pair.name);
         this.spotSzDecimalsMap.set(baseToken.name, baseToken.szDecimals);
 
-        this.log(`Spot: ${baseToken.name} → asset ${spotAssetIndex} (szDecimals: ${baseToken.szDecimals})`);
+        this.log(
+          `Spot: ${baseToken.name} → asset ${spotAssetIndex}, market ${pair.name} (szDecimals: ${baseToken.szDecimals})`
+        );
       }
 
       this.spotMetaLoaded = true;
@@ -514,6 +706,11 @@ export class HyperliquidClient {
   /** Get the spot asset index for a coin, or undefined if not a spot asset */
   getSpotAssetIndex(coin: string): number | undefined {
     return this.spotAssetMap.get(coin);
+  }
+
+  /** Get the preferred spot market key for a coin (e.g. "@230", "PURR/USDC") */
+  getSpotMarketKey(coin: string): string | undefined {
+    return this.spotPairNameMap.get(coin);
   }
 
   /** Get spot szDecimals for a coin */
@@ -539,19 +736,18 @@ export class HyperliquidClient {
     }>;
   }> {
     this.log('Fetching spotClearinghouseState for:', user ?? this.address);
-    const baseUrl = isMainnet()
-      ? 'https://api.hyperliquid.xyz'
-      : 'https://api.hyperliquid-testnet.xyz';
-
-    const response = await fetch(baseUrl + '/info', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        type: 'spotClearinghouseState',
-        user: user ?? this.address,
-      }),
-    });
-    const data = await response.json();
+    const data = await this.postInfo<{
+      balances: Array<{
+        coin: string;
+        token: number;
+        hold: string;
+        total: string;
+        entryNtl: string;
+      }>;
+    }>({
+      type: 'spotClearinghouseState',
+      user: user ?? this.address,
+    }, 'spotClearinghouseState');
     this.log('spotClearinghouseState response:', JSON.stringify(data).slice(0, 500));
     return data;
   }
@@ -631,7 +827,16 @@ export class HyperliquidClient {
   }> {
     this.log('Fetching l2Book for:', coin);
     // API accepts prefixed names directly (e.g., "xyz:CL")
-    const response = await this.info.l2Book({ coin });
+    let response;
+    try {
+      response = await this.info.l2Book({ coin });
+    } catch (error) {
+      this.log('l2Book failure context:', this.getTransportContext(`l2Book(${coin})`));
+      if (error instanceof Error && error.stack) {
+        this.log('l2Book stack:', error.stack);
+      }
+      throw new Error(`l2Book(${coin}) failed: ${this.describeError(error)}`);
+    }
 
     const bids = response.levels[0] as Array<{ px: string; sz: string; n: number }>;
     const asks = response.levels[1] as Array<{ px: string; sz: string; n: number }>;
@@ -653,6 +858,28 @@ export class HyperliquidClient {
     };
   }
 
+  async getAssetIndexAsync(coin: string): Promise<number> {
+    let index = this.assetMap.get(coin);
+    if (index === undefined && coin.includes(':')) {
+      // Try on-demand loading the dex (e.g., "felix:BTC" → load "felix")
+      const dexName = coin.split(':')[0];
+      await this.loadSingleHip3Dex(dexName);
+      index = this.assetMap.get(coin);
+    }
+    if (index === undefined) {
+      const hip3Matches = this.findHip3Matches(coin);
+      if (hip3Matches.length > 0) {
+        const suggestions = hip3Matches.map(m => `${m}`).join(', ');
+        throw new Error(
+          `Unknown asset: ${coin}. Did you mean one of these HIP-3 assets? ${suggestions}\n` +
+          `Use "openbroker search --query ${coin}" to find the full ticker.`
+        );
+      }
+      throw new Error(`Unknown asset: ${coin}. Available: ${Array.from(this.assetMap.keys()).slice(0, 10).join(', ')}...`);
+    }
+    return index;
+  }
+
   getAssetIndex(coin: string): number {
     const index = this.assetMap.get(coin);
     if (index === undefined) {
@@ -668,6 +895,25 @@ export class HyperliquidClient {
       throw new Error(`Unknown asset: ${coin}. Available: ${Array.from(this.assetMap.keys()).slice(0, 10).join(', ')}...`);
     }
     return index;
+  }
+
+  async getSzDecimalsAsync(coin: string): Promise<number> {
+    let decimals = this.szDecimalsMap.get(coin);
+    if (decimals === undefined && coin.includes(':')) {
+      const dexName = coin.split(':')[0];
+      await this.loadSingleHip3Dex(dexName);
+      decimals = this.szDecimalsMap.get(coin);
+    }
+    if (decimals === undefined) {
+      const hip3Matches = this.findHip3Matches(coin);
+      if (hip3Matches.length > 0) {
+        throw new Error(
+          `Unknown asset: ${coin}. Did you mean: ${hip3Matches.join(', ')}?`
+        );
+      }
+      throw new Error(`Unknown asset: ${coin}`);
+    }
+    return decimals;
   }
 
   getSzDecimals(coin: string): number {
@@ -802,6 +1048,67 @@ export class HyperliquidClient {
   }
 
   /**
+   * Query the role of an address on HyperCore L1.
+   * Returns: "user" | "agent" | "vault" | "subAccount" | "missing"
+   * Useful for verifying API wallet (agent) registration.
+   */
+  async getUserRole(address?: string): Promise<{ role: string; data?: Record<string, string> }> {
+    const target = address ?? this.address;
+    this.log('Fetching userRole for:', target);
+    try {
+      const response = await this.postInfo<{ role: string; data?: Record<string, string> }>(
+        { type: 'userRole', user: target },
+        'userRole'
+      );
+      this.log('userRole response:', JSON.stringify(response));
+      return response ?? { role: 'missing' };
+    } catch (e) {
+      this.log('userRole query failed:', e);
+      return { role: 'unknown' };
+    }
+  }
+
+  /**
+   * Validate API wallet setup: check that the signing wallet is recognized
+   * as an "agent" on HyperCore and the account address exists.
+   * Logs warnings if misconfigured.
+   */
+  async validateApiWalletSetup(): Promise<{ valid: boolean; walletRole: string; accountRole: string }> {
+    const walletResult = await this.getUserRole(this.walletAddress);
+    const accountResult = await this.getUserRole(this.address);
+    const walletRole = walletResult.role;
+    const accountRole = accountResult.role;
+
+    this.log(`API wallet validation: wallet ${this.walletAddress} role=${walletRole}, account ${this.address} role=${accountRole}`);
+
+    if (walletRole === 'agent') {
+      const masterAddress = walletResult.data?.user;
+      if (masterAddress && masterAddress.toLowerCase() !== this.address.toLowerCase()) {
+        console.warn(
+          `\x1b[33m⚠️  API wallet ${this.walletAddress} is an agent for ${masterAddress}, but HYPERLIQUID_ACCOUNT_ADDRESS is ${this.address}.\n` +
+          `   These should match.\x1b[0m`
+        );
+      } else {
+        this.log(`API wallet confirmed as agent for ${masterAddress ?? this.address}`);
+      }
+    } else {
+      console.warn(
+        `\x1b[33m⚠️  API wallet ${this.walletAddress} has role "${walletRole}" on HyperCore (expected "agent").\n` +
+        `   Make sure the agent is registered via CoreWriter.registerAgent() on the correct network (${isMainnet() ? 'mainnet' : 'testnet'}).\x1b[0m`
+      );
+    }
+
+    if (accountRole === 'missing') {
+      console.warn(
+        `\x1b[33m⚠️  Account ${this.address} has role "missing" on HyperCore.\n` +
+        `   The account may not exist on ${isMainnet() ? 'mainnet' : 'testnet'} yet. Ensure the contract is deployed and has interacted with HyperCore.\x1b[0m`
+      );
+    }
+
+    return { valid: walletRole === 'agent', walletRole, accountRole };
+  }
+
+  /**
    * Check if an address has sub-accounts (is a master account)
    * Sub-accounts cannot approve builder fees - only master accounts can
    */
@@ -890,7 +1197,7 @@ export class HyperliquidClient {
       const response = await this.exchange.approveBuilderFee({
         builder: targetBuilder as `0x${string}`,
         maxFeeRate,
-      });
+      }, this.vaultParam);
       this.log('approveBuilderFee response:', response);
       return { status: 'ok', response };
     } catch (error) {
@@ -1239,7 +1546,17 @@ export class HyperliquidClient {
     this.log('Fetching clearinghouseState for:', user ?? this.address, dex ? `dex: ${dex}` : '');
     const params: { user: string; dex?: string } = { user: user ?? this.address };
     if (dex !== undefined) params.dex = dex;
-    const response = await this.info.clearinghouseState(params as any);
+    const label = dex ? `clearinghouseState(${dex})` : 'clearinghouseState(main)';
+    let response;
+    try {
+      response = await this.withRetry(() => this.info.clearinghouseState(params as any), label);
+    } catch (error) {
+      this.log(`${label} failure context:`, this.getTransportContext(label));
+      if (error instanceof Error && error.stack) {
+        this.log(`${label} stack:`, error.stack);
+      }
+      throw new Error(`${label} failed: ${this.describeError(error)}`);
+    }
 
     // The SDK response has `withdrawable` as a top-level field, not inside
     // marginSummary/crossMarginSummary. Copy it into our MarginSummary shape.
@@ -1264,12 +1581,11 @@ export class HyperliquidClient {
 
     const unified = await this.isUnifiedAccount(user);
     const mainState = await this.getUserState(user);
-    const dexs = await this.getPerpDexs();
 
-    // Collect positions from all HIP-3 dexes (in parallel)
-    const validDexs = dexs.slice(1).filter((d): d is NonNullable<typeof d> => d != null);
-    const dexResults = await Promise.allSettled(
-      validDexs.map(async (dex) => {
+    // Collect positions from all HIP-3 dexes (in parallel; testnet: only loaded dexes)
+    const validDexs = await this.getIterableHip3Dexs();
+    const dexResults = await this.batchSettled(
+      validDexs.map((dex) => async () => {
         const dexState = await this.getUserState(user, dex.name);
         return { dex, dexState };
       })
@@ -1366,13 +1682,12 @@ export class HyperliquidClient {
     await this.getMetaAndAssetCtxs(); // Ensure HIP-3 dex list is loaded
 
     // Fetch main dex orders
-    const orders = await this.info.openOrders({ user: user ?? this.address }) as OpenOrder[];
+    const orders = await this.withRetry(() => this.info.openOrders({ user: user ?? this.address }), 'openOrders') as OpenOrder[];
 
-    // Fetch HIP-3 dex orders (in parallel)
-    const dexs = await this.getPerpDexs();
-    const validDexs = dexs.slice(1).filter((d): d is NonNullable<typeof d> => d != null);
-    const dexResults = await Promise.allSettled(
-      validDexs.map(async (dex) => {
+    // Fetch HIP-3 dex orders (in parallel; testnet: only loaded dexes)
+    const validDexs = await this.getIterableHip3Dexs();
+    const dexResults = await this.batchSettled(
+      validDexs.map((dex) => async () => {
         const dexOrders = await this.info.openOrders({ user: user ?? this.address, dex: dex.name }) as OpenOrder[];
         return { dex, dexOrders };
       })
@@ -1442,7 +1757,7 @@ export class HyperliquidClient {
         destinationDex: dexInfo.dexName,
         token: 'USDC:0x6d1e7cde53ba9467b783cb7c530ce054',
         amount: String(transferAmount),
-      });
+      }, this.vaultParam as any);
       this.log(`Transferred ${transferAmount} USDC to ${dexInfo.dexName} dex`);
     } catch (err) {
       // Log but don't block — dex may already have sufficient balance
@@ -1460,7 +1775,7 @@ export class HyperliquidClient {
     includeBuilder: boolean = true,
     leverage?: number
   ): Promise<OrderResponse> {
-    this.requireTrading();
+    await this.requireTrading();
     await this.getMetaAndAssetCtxs();
 
     // Set leverage if specified (for main perps, cross margin; for HIP-3, handled in ensureHip3Ready)
@@ -1495,14 +1810,14 @@ export class HyperliquidClient {
       grouping: 'na',
     };
 
-    // Add builder fee if configured
-    if (includeBuilder && this.config.builderAddress !== '0x0000000000000000000000000000000000000000') {
+    // Add builder fee if configured (skip on testnet — builder may not be approved)
+    if (includeBuilder && !this.isTestnet && this.config.builderAddress !== '0x0000000000000000000000000000000000000000') {
       orderRequest.builder = this.builderInfo;
       this.log('Including builder fee:', this.builderInfo);
     }
 
     try {
-      const response = await this.exchange.order(orderRequest);
+      const response = await this.exchange.order(orderRequest, this.vaultParam);
       this.log('Order response:', JSON.stringify(response, null, 2));
       return response as unknown as OrderResponse;
     } catch (error) {
@@ -1592,7 +1907,7 @@ export class HyperliquidClient {
     reduceOnly: boolean = true,
     leverage?: number
   ): Promise<OrderResponse> {
-    this.requireTrading();
+    await this.requireTrading();
     await this.getMetaAndAssetCtxs();
 
     // Set leverage if specified (for main perps)
@@ -1636,14 +1951,14 @@ export class HyperliquidClient {
       grouping: 'na',
     };
 
-    // Add builder fee if configured
-    if (this.config.builderAddress !== '0x0000000000000000000000000000000000000000') {
+    // Add builder fee if configured (skip on testnet — builder may not be approved)
+    if (!this.isTestnet && this.config.builderAddress !== '0x0000000000000000000000000000000000000000') {
       orderRequest.builder = this.builderInfo;
       this.log('Including builder fee:', this.builderInfo);
     }
 
     try {
-      const response = await this.exchange.order(orderRequest);
+      const response = await this.exchange.order(orderRequest, this.vaultParam);
       this.log('Trigger order response:', JSON.stringify(response, null, 2));
       return response as unknown as OrderResponse;
     } catch (error) {
@@ -1689,7 +2004,7 @@ export class HyperliquidClient {
   }
 
   async cancel(coin: string, oid: number): Promise<CancelResponse> {
-    this.requireTrading();
+    await this.requireTrading();
     await this.getMetaAndAssetCtxs();
 
     const assetIndex = this.getAssetIndex(coin);
@@ -1699,7 +2014,7 @@ export class HyperliquidClient {
     try {
       const response = await this.exchange.cancel({
         cancels: [{ a: assetIndex, o: oid }],
-      });
+      }, this.vaultParam);
       this.log('Cancel response:', JSON.stringify(response, null, 2));
       return response as unknown as CancelResponse;
     } catch (error) {
@@ -1746,7 +2061,7 @@ export class HyperliquidClient {
     orderType: { limit: { tif: 'Gtc' | 'Ioc' | 'Alo' } },
     includeBuilder: boolean = true,
   ): Promise<OrderResponse> {
-    this.requireTrading();
+    await this.requireTrading();
     await this.loadSpotMeta();
 
     const assetIndex = this.spotAssetMap.get(coin);
@@ -1779,14 +2094,14 @@ export class HyperliquidClient {
       grouping: 'na',
     };
 
-    // Add builder fee if configured (spot max is 1000 vs 100 for perps)
-    if (includeBuilder && this.config.builderAddress !== '0x0000000000000000000000000000000000000000') {
+    // Add builder fee if configured (skip on testnet — builder may not be approved)
+    if (includeBuilder && !this.isTestnet && this.config.builderAddress !== '0x0000000000000000000000000000000000000000') {
       orderRequest.builder = this.builderInfo;
       this.log('Including builder fee:', this.builderInfo);
     }
 
     try {
-      const response = await this.exchange.order(orderRequest);
+      const response = await this.exchange.order(orderRequest, this.vaultParam);
       this.log('Spot order response:', JSON.stringify(response, null, 2));
       return response as unknown as OrderResponse;
     } catch (error) {
@@ -1813,18 +2128,33 @@ export class HyperliquidClient {
   ): Promise<OrderResponse> {
     await this.loadSpotMeta();
 
-    // Get the spot pair name (@index or PURR/USDC) for allMids lookup
     const assetIndex = this.spotAssetMap.get(coin);
-    if (assetIndex === undefined) {
+    const spotCoinKey = this.spotPairNameMap.get(coin);
+    if (assetIndex === undefined || !spotCoinKey) {
       throw new Error(`Unknown spot asset: ${coin}. Use "openbroker spot" to see available markets.`);
     }
-    const spotPairIndex = assetIndex - 10000;
-    // Canonical PURR/USDC is index 0, everything else uses @index
-    const spotCoinKey = spotPairIndex === 0 ? 'PURR/USDC' : `@${spotPairIndex}`;
 
-    // Use allMids for accurate live prices (spotMetaAndAssetCtxs contexts can be misaligned)
+    // Use the exact spot market key from spotMeta (e.g. "@230", "PURR/USDC").
+    // On testnet the tradable asset id and displayed market key can diverge.
     const mids = await this.getAllMids();
-    const midStr = mids[spotCoinKey];
+    let midStr = mids[spotCoinKey];
+
+    // Fallback: allMids may omit spot pairs (especially on testnet).
+    // Try spotMetaAndAssetCtxs which returns markPx directly.
+    if (!midStr) {
+      this.log(`allMids missing spot key "${spotCoinKey}", falling back to spotMetaAndAssetCtxs`);
+      try {
+        const spotData = await this.getSpotMetaAndAssetCtxs();
+        const ctxMap = new Map<string, string>();
+        for (const ctx of spotData.assetCtxs as Array<{ coin?: string; midPx?: string; markPx: string }>) {
+          if (ctx.coin) ctxMap.set(ctx.coin, ctx.midPx || ctx.markPx);
+        }
+        midStr = ctxMap.get(spotCoinKey);
+      } catch (e) {
+        this.log(`spotMetaAndAssetCtxs fallback failed:`, e);
+      }
+    }
+
     const midPrice = midStr ? parseFloat(midStr) : 0;
 
     if (!midPrice || midPrice === 0) {
@@ -1876,7 +2206,7 @@ export class HyperliquidClient {
    * Cancel a spot order by coin and order ID.
    */
   async spotCancel(coin: string, oid: number): Promise<CancelResponse> {
-    this.requireTrading();
+    await this.requireTrading();
     await this.loadSpotMeta();
 
     const assetIndex = this.spotAssetMap.get(coin);
@@ -1889,7 +2219,7 @@ export class HyperliquidClient {
     try {
       const response = await this.exchange.cancel({
         cancels: [{ a: assetIndex, o: oid }],
-      });
+      }, this.vaultParam);
       this.log('Spot cancel response:', JSON.stringify(response, null, 2));
       return response as unknown as CancelResponse;
     } catch (error) {
@@ -1908,7 +2238,7 @@ export class HyperliquidClient {
     leverage: number,
     isCross: boolean = true
   ): Promise<unknown> {
-    this.requireTrading();
+    await this.requireTrading();
     await this.getMetaAndAssetCtxs();
 
     // HIP-3 perps only support isolated margin — override isCross and clamp leverage
@@ -1933,7 +2263,7 @@ export class HyperliquidClient {
         asset: assetIndex,
         isCross,
         leverage,
-      });
+      }, this.vaultParam);
       this.log('Leverage response:', JSON.stringify(response, null, 2));
       return response;
     } catch (error) {
@@ -1983,7 +2313,8 @@ export class HyperliquidClient {
           m: durationMinutes,
           t: randomize,
         },
-      });
+
+      }, this.vaultParam);
       this.log('TWAP order response:', JSON.stringify(response, null, 2));
       return response;
     } catch (error) {
@@ -2008,7 +2339,7 @@ export class HyperliquidClient {
       const response = await this.exchange.twapCancel({
         a: assetIndex,
         t: twapId,
-      });
+      }, this.vaultParam);
       this.log('TWAP cancel response:', JSON.stringify(response, null, 2));
       return response;
     } catch (error) {

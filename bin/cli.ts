@@ -112,6 +112,8 @@ Automations:
   auto status          Show running automations
 
 Options:
+  -c, --config <path>  Use a specific .env config file
+  --testnet            Use testnet
   --help, -h           Show help for a command
   --dry                Preview without executing
   --verbose            Show debug output
@@ -134,11 +136,30 @@ Documentation: https://github.com/aurracloud/open-broker
 function runScript(scriptPath: string, args: string[]) {
   const fullPath = path.join(scriptsDir, scriptPath);
 
+  // Handle global flags: set env vars and strip from args
+  const env = { ...process.env };
+  const testnetIdx = args.indexOf('--testnet');
+  if (testnetIdx !== -1) {
+    env.HYPERLIQUID_NETWORK = 'testnet';
+    args = [...args.slice(0, testnetIdx), ...args.slice(testnetIdx + 1)];
+  }
+
+  // Handle -c / --config flag: load the specified .env file
+  // Resolve relative to the user's original working directory (not the package root)
+  let configIdx = args.indexOf('-c');
+  if (configIdx === -1) configIdx = args.indexOf('--config');
+  if (configIdx !== -1 && args[configIdx + 1]) {
+    const originalCwd = process.env.OPENBROKER_CWD || process.cwd();
+    const configPath = path.resolve(originalCwd, args[configIdx + 1]);
+    env.OPENBROKER_CONFIG = configPath;
+    args = [...args.slice(0, configIdx), ...args.slice(configIdx + 2)];
+  }
+
   // Use tsx to run TypeScript directly
   const child = spawn('npx', ['tsx', fullPath, ...args], {
     stdio: 'inherit',
     cwd: path.resolve(__dirname, '..'),
-    env: { ...process.env },
+    env,
   });
 
   child.on('error', (err) => {

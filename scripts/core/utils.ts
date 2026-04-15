@@ -155,8 +155,11 @@ export function generateCloid(): string {
  * Returns true if approved, false if not
  */
 export async function checkBuilderFeeApproval(
-  client: { getMaxBuilderFee: () => Promise<string | null>; builderAddress: string }
+  client: { getMaxBuilderFee: () => Promise<string | null>; builderAddress: string; isTestnet: boolean }
 ): Promise<boolean> {
+  // Skip builder fee check on testnet — builder may not have balance
+  if (client.isTestnet) return true;
+
   const approval = await client.getMaxBuilderFee();
   if (!approval) {
     console.log('⚠️  Builder fee not approved!');

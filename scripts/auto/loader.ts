@@ -70,8 +70,9 @@ export async function loadExampleConfigs(): Promise<Record<string, AutomationCon
   for (const example of examples) {
     try {
       const mod = await import(example.path);
-      if (mod.config && typeof mod.config === 'object' && mod.config.description) {
-        configs[example.name] = mod.config as AutomationConfig;
+      const config = resolveAutomationConfig(mod);
+      if (config && typeof config === 'object' && config.description) {
+        configs[example.name] = config;
       }
     } catch {
       // Skip examples that fail to load
@@ -81,6 +82,39 @@ export async function loadExampleConfigs(): Promise<Record<string, AutomationCon
   return configs;
 }
 
+function resolveAutomationFactory(mod: Record<string, unknown>): AutomationFactory | null {
+  const candidates = [
+    mod.default,
+    (mod.default as Record<string, unknown> | undefined)?.default,
+    mod["module.exports"],
+    ((mod["module.exports"] as Record<string, unknown> | undefined)?.default)
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === "function") {
+      return candidate as AutomationFactory;
+    }
+  }
+
+  return null;
+}
+
+function resolveAutomationConfig(mod: Record<string, unknown>): AutomationConfig | null {
+  const candidates = [
+    mod.config,
+    (mod.default as Record<string, unknown> | undefined)?.config,
+    (mod["module.exports"] as Record<string, unknown> | undefined)?.config
+  ];
+
+  for (const candidate of candidates) {
+    if (candidate && typeof candidate === "object" && "description" in candidate) {
+      return candidate as AutomationConfig;
+    }
+  }
+
+  return null;
+}
+
 /** Load an automation module and validate the default export */
 export async function loadAutomation(scriptPath: string): Promise<AutomationFactory> {
   const absolutePath = path.resolve(scriptPath);
@@ -88,7 +122,7 @@ export async function loadAutomation(scriptPath: string): Promise<AutomationFact
   // Dynamic import — tsx handles TypeScript transpilation
   const mod = await import(absolutePath);
 
-  const factory = mod.default;
+  const factory = resolveAutomationFactory(mod as Record<string, unknown>);
   if (typeof factory !== 'function') {
     throw new Error(
       `Automation script must export a default function.\n` +

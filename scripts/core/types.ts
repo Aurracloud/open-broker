@@ -12,6 +12,7 @@ export interface OpenBrokerConfig {
   builderAddress: string;
   builderFee: number;         // tenths of bps (10 = 1 bps)
   slippageBps: number;
+  vaultAddress?: string;      // Explicit vault address for vault trading (ERC4626 / native vaults via CoreWriter)
 }
 
 // ============ Builder ============

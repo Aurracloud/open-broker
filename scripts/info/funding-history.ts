@@ -43,6 +43,9 @@ async function main() {
   try {
     // Load metadata (needed for HIP-3 coin resolution)
     await client.getMetaAndAssetCtxs();
+    if (client.isTestnet && coin.includes(':')) {
+      await client.loadSingleHip3Dex(coin.split(':')[0]);
+    }
 
     const now = Date.now();
     const startTime = now - (hours * 3_600_000);

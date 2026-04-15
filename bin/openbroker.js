@@ -56,6 +56,10 @@ child.on('error', (err) => {
   }
 });
 
+// Let the child handle SIGINT (Ctrl+C) — don't exit the wrapper early
+process.on('SIGINT', () => {});
+process.on('SIGTERM', () => { child.kill('SIGTERM'); });
+
 child.on('exit', (code) => {
   process.exit(code ?? 0);
 });

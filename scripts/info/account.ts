@@ -123,15 +123,19 @@ async function main() {
     console.log(`Account Mode:     ${modeLabel[accountMode] ?? accountMode}`);
 
     if (!isOtherAccount) {
-      // Check builder fee approval
-      const builderApproval = await client.getMaxBuilderFee();
-      console.log(`Builder Address:  ${client.builderAddress}`);
-      console.log(`Builder Fee:      ${client.builderFeeBps} bps`);
-      if (builderApproval) {
-        console.log(`Builder Approved: ✅ Yes (max: ${builderApproval})`);
+      // Check builder fee approval (skip on testnet)
+      if (client.isTestnet) {
+        console.log(`Builder Fee:      skipped (testnet)`);
       } else {
-        console.log(`Builder Approved: ❌ No`);
-        console.log(`\n⚠️  Run: npx tsx scripts/setup/approve-builder.ts`);
+        const builderApproval = await client.getMaxBuilderFee();
+        console.log(`Builder Address:  ${client.builderAddress}`);
+        console.log(`Builder Fee:      ${client.builderFeeBps} bps`);
+        if (builderApproval) {
+          console.log(`Builder Approved: ✅ Yes (max: ${builderApproval})`);
+        } else {
+          console.log(`Builder Approved: ❌ No`);
+          console.log(`\n⚠️  Run: npx tsx scripts/setup/approve-builder.ts`);
+        }
       }
 
       // Warn if API wallet setup looks misconfigured

@@ -15,6 +15,7 @@ import { AutomationEventBus } from './events.js';
 import { loadAutomation } from './loader.js';
 import { registerAutomation, unregisterAutomation, getRegisteredAutomations as getRegisteredFromFile } from './registry.js';
 import { createAutomationAudit, toSerializable, type AutomationAuditSink } from './audit.js';
+import { withDashboardForwarder, forwardAgentAction } from './dashboard-forwarder.js';
 import type {
   AutomationAPI,
   AutomationEventPayloads,
@@ -178,6 +179,11 @@ function createAuditedClient(
               result,
               dryRun,
             });
+            forwardAgentAction(
+              prop,
+              'success',
+              { args: toSerializable(args), result: toSerializable(result), dryRun },
+            );
             return result;
           } catch (error) {
             audit.recordAction({
@@ -187,6 +193,11 @@ function createAuditedClient(
               error,
               dryRun,
             });
+            forwardAgentAction(
+              prop,
+              'error',
+              { args: toSerializable(args), error: String(error), dryRun },
+            );
             throw error;
           }
         };
@@ -424,10 +435,10 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
 
   // Build the API object
   const publish = createAuditedPublish(createPublish(id, log, gatewayPort, hooksToken), audit);
-  const auditApi: AutomationAudit = {
+  const auditApi: AutomationAudit = withDashboardForwarder({
     record: (kind: string, payload?: unknown) => audit.recordNote(kind, payload),
     metric: (name: string, value: number, tags?: Record<string, unknown>) => audit.recordMetric(name, value, tags),
-  };
+  });
   const api: AutomationAPI = {
     client,
     utils: { roundPrice, roundSize, sleep, normalizeCoin, formatUsd, formatPercent, annualizeFundingRate },

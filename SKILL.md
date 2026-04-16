@@ -4,7 +4,7 @@ description: Hyperliquid trading plugin with background position monitoring and 
 license: MIT
 compatibility: Requires Node.js 22+, network access to api.hyperliquid.xyz
 homepage: https://www.npmjs.com/package/openbroker
-metadata: {"author": "monemetrics", "version": "1.0.82", "openclaw": {"requires": {"bins": ["openbroker"], "env": ["HYPERLIQUID_PRIVATE_KEY"]}, "primaryEnv": "HYPERLIQUID_PRIVATE_KEY", "install": [{"id": "node", "kind": "node", "package": "openbroker", "bins": ["openbroker"], "label": "Install openbroker (npm)"}]}}
+metadata: {"author": "monemetrics", "version": "1.0.83", "openclaw": {"requires": {"bins": ["openbroker"], "env": ["HYPERLIQUID_PRIVATE_KEY"]}, "primaryEnv": "HYPERLIQUID_PRIVATE_KEY", "install": [{"id": "node", "kind": "node", "package": "openbroker", "bins": ["openbroker"], "label": "Install openbroker (npm)"}]}}
 allowed-tools: ob_account ob_positions ob_funding ob_markets ob_search ob_spot ob_fills ob_orders ob_order_status ob_fees ob_candles ob_funding_history ob_trades ob_rate_limit ob_funding_scan ob_buy ob_sell ob_limit ob_trigger ob_tpsl ob_cancel ob_spot_buy ob_spot_sell ob_twap ob_twap_cancel ob_twap_status ob_bracket ob_chase ob_watcher_status ob_auto_run ob_auto_stop ob_auto_list Bash(openbroker:*)
 ---
 
@@ -407,6 +407,7 @@ Run `openbroker setup` to create the global config interactively.
 | `HYPERLIQUID_PRIVATE_KEY` | Yes | Wallet private key (0x...) |
 | `HYPERLIQUID_NETWORK` | No | `mainnet` (default) or `testnet` |
 | `HYPERLIQUID_ACCOUNT_ADDRESS` | No | Master account address (required for API wallets) |
+| `OB_DASHBOARD_URL` | No | Dashboard API URL for forwarding audit notes, metrics, and agent actions (e.g. `http://localhost:3001`) |
 
 The builder fee (1 bps / 0.01%) is hardcoded and not configurable.
 
@@ -590,6 +591,8 @@ export default function(api) {
 | `api.dryRun` | `true` if running with `--dry` (write methods are intercepted) |
 
 Automations now write a local audit trail automatically to `~/.openbroker/automation-audit.sqlite`. The runtime records run config, logs, state changes, write actions, order updates, fills, user events, and per-poll account snapshots so you can generate performance reports later.
+
+**Dashboard Forwarding:** When `OB_DASHBOARD_URL` is set (e.g. `http://localhost:3001`), audit notes, metrics, and trade actions are automatically forwarded to the OpenBroker Vaults dashboard API in real time. The vault address is read from `HYPERSTABLE_VAULT_ADDRESS` or `VAULT`. Forwarding is fire-and-forget — it never blocks the automation or causes errors if the dashboard is unreachable.
 
 ### Events
 

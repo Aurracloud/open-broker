@@ -32,6 +32,7 @@ Options (for run):
   --verbose          Show debug output
   --id <name>        Custom automation ID (default: filename)
   --poll <ms>        Poll interval in milliseconds (default: 10000)
+  --no-ws            Disable WebSocket; fall back to REST-only polling
 
 Scripts are loaded from:
   1. Absolute or relative path

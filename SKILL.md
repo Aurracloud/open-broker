@@ -46,9 +46,27 @@ Or with the `ob_search` plugin tool: `{ "query": "gold" }` or `{ "query": "oil",
 
 **HIP-3 assets use `dex:COIN` format** — e.g., `xyz:CL` not just `CL`. If you get an error like "No market data found", search for the asset to find the correct prefixed ticker. Common HIP-3 dexes: `xyz`, `flx`, `km`, `hyna`, `vntl`, `cash`.
 
+### Asset IDs (disambiguation)
+
+Every info JSON output includes an `assetId` field — the canonical Hyperliquid asset index. Prefer it over the coin name when persisting references, because the same ticker can exist on multiple providers (e.g. `HYPE` perp, `hyna:HYPE` HIP-3, and `HYPE/USDC` spot all coexist).
+
+| Scope | Formula | Example |
+|-------|---------|---------|
+| Main perps | universe index | `HYPE` → `159` |
+| HIP-3 perps | `100000 + dexIdx * 10000 + assetIdx` | `hyna:HYPE` → `140002` |
+| Spot | `10000 + pair.index` | `HYPE/USDC` → `10107` |
+
+```bash
+openbroker search HYPE --json | jq '.[] | {coin, assetId, type, provider}'
+```
+
+Trading commands still take `--coin <name>` (including HIP-3 `dex:COIN`) — `assetId` is for queries, comparisons, and agent state, not order placement.
+
 ## Troubleshooting: CLI Fallback
 
 If an `ob_*` plugin tool returns unexpected errors, empty results, or crashes, **fall back to the equivalent CLI command** via Bash. The CLI and plugin tools share the same core code, but the CLI has more mature error handling and output.
+
+**Every info command supports `--json`** for structured output. The table below covers the commands with dedicated plugin tools; any other info command (e.g. `spot`, `trades`, `fees`, `order-status`, `rate-limit`, `funding-history`, `all-markets`) can be run as `openbroker <command> --json` for the same effect.
 
 | Plugin Tool | CLI Equivalent |
 |-------------|---------------|
@@ -56,18 +74,24 @@ If an `ob_*` plugin tool returns unexpected errors, empty results, or crashes, *
 | `ob_positions` | `openbroker positions --json` |
 | `ob_funding` | `openbroker funding --json --include-hip3` |
 | `ob_markets` | `openbroker markets --json --include-hip3` |
-| `ob_search` | `openbroker search --query <QUERY>` |
+| `ob_search` | `openbroker search --query <QUERY> --json` |
+| `ob_spot` | `openbroker spot --json` (or `--balances --json`) |
+| `ob_fills` | `openbroker fills --json` |
+| `ob_orders` | `openbroker orders --json` |
+| `ob_order_status` | `openbroker order-status --oid <OID> --json` |
+| `ob_fees` | `openbroker fees --json` |
+| `ob_candles` | `openbroker candles --coin <COIN> --json` |
+| `ob_funding_history` | `openbroker funding-history --coin <COIN> --json` |
+| `ob_trades` | `openbroker trades --coin <COIN> --json` |
+| `ob_rate_limit` | `openbroker rate-limit --json` |
+| `ob_funding_scan` | `openbroker funding-scan --json` |
 | `ob_buy` | `openbroker buy --coin <COIN> --size <SIZE>` |
 | `ob_sell` | `openbroker sell --coin <COIN> --size <SIZE>` |
 | `ob_limit` | `openbroker limit --coin <COIN> --side <SIDE> --size <SIZE> --price <PRICE>` |
 | `ob_tpsl` | `openbroker tpsl --coin <COIN> --tp <PRICE> --sl <PRICE>` |
 | `ob_cancel` | `openbroker cancel --all` or `--coin <COIN>` |
-| `ob_fills` | `openbroker fills --json` |
-| `ob_orders` | `openbroker orders --json` |
-| `ob_funding_scan` | `openbroker funding-scan --json` |
-| `ob_candles` | `openbroker candles --coin <COIN> --json` |
 | `ob_auto_run` | `openbroker auto run <script> [--dry]` |
-| `ob_auto_stop` | (stop via SIGINT when using CLI) |
+| `ob_auto_stop` | `openbroker auto stop <id>` (or SIGINT if run in foreground) |
 | `ob_auto_list` | `openbroker auto list` |
 
 **When to use CLI fallback:**
@@ -137,12 +161,14 @@ openbroker positions --address 0xabc...  # Another account's positions
 ```bash
 openbroker funding --top 20   # Top 20 by funding rate
 openbroker funding --coin ETH # Specific coin
+openbroker funding --top 20 --json  # JSON (includes assetId)
 ```
 
 ### Markets
 ```bash
 openbroker markets --top 30   # Top 30 main perps
 openbroker markets --coin BTC # Specific coin
+openbroker markets --coin BTC --json  # JSON (includes assetId)
 ```
 
 ### All Markets (Perps + Spot + HIP-3)
@@ -152,6 +178,7 @@ openbroker all-markets --type perp     # Main perps only
 openbroker all-markets --type hip3     # HIP-3 perps only
 openbroker all-markets --type spot     # Spot markets only
 openbroker all-markets --top 20        # Top 20 by volume
+openbroker all-markets --json          # JSON (includes assetId)
 ```
 
 ### Search Markets (Find assets across providers)
@@ -159,6 +186,7 @@ openbroker all-markets --top 20        # Top 20 by volume
 openbroker search --query GOLD    # Find all GOLD markets
 openbroker search --query BTC     # Find BTC across all providers
 openbroker search --query ETH --type perp  # ETH perps only
+openbroker search HYPE --json     # JSON with assetId per result
 ```
 
 ### Spot Markets
@@ -168,6 +196,7 @@ openbroker spot --coin PURR       # Show PURR market info
 openbroker spot --balances        # Show your spot balances
 openbroker spot --balances --address 0xabc...  # Another account's spot balances
 openbroker spot --top 20          # Top 20 by volume
+openbroker spot --json            # JSON (includes assetId, base, quote)
 ```
 
 ### Trade Fills
@@ -193,12 +222,14 @@ openbroker orders --address 0xabc... --open  # Another account's open orders
 openbroker order-status --oid 123456789   # Check specific order
 openbroker order-status --oid 0x1234...   # By client order ID
 openbroker order-status --oid 123456789 --address 0xabc...  # On another account
+openbroker order-status --oid 123456789 --json
 ```
 
 ### Fee Schedule
 ```bash
 openbroker fees                           # Fee tier, rates, and volume
 openbroker fees --address 0xabc...        # Another account's fees
+openbroker fees --json
 ```
 
 ### Candle Data (OHLCV)
@@ -206,23 +237,27 @@ openbroker fees --address 0xabc...        # Another account's fees
 openbroker candles --coin ETH                           # 24 hourly candles
 openbroker candles --coin BTC --interval 4h --bars 48   # 48 four-hour bars
 openbroker candles --coin SOL --interval 1d --bars 30   # 30 daily bars
+openbroker candles --coin ETH --json                    # JSON (coin, assetId, interval, candles)
 ```
 
 ### Funding History
 ```bash
 openbroker funding-history --coin ETH              # Last 24h
 openbroker funding-history --coin BTC --hours 168  # Last 7 days
+openbroker funding-history --coin ETH --json       # JSON (coin, assetId, history)
 ```
 
 ### Recent Trades (Tape)
 ```bash
 openbroker trades --coin ETH              # Last 30 trades
 openbroker trades --coin BTC --top 50     # Last 50 trades
+openbroker trades --coin ETH --json       # JSON (coin, assetId, trades)
 ```
 
 ### Rate Limit
 ```bash
 openbroker rate-limit                     # API usage and capacity
+openbroker rate-limit --json
 ```
 
 ### Funding Rate Scanner (Cross-Dex)
@@ -231,6 +266,7 @@ openbroker funding-scan                          # Scan all dexes, >25% threshol
 openbroker funding-scan --threshold 50 --pairs   # Show opposing funding pairs
 openbroker funding-scan --hip3-only --top 20     # HIP-3 only
 openbroker funding-scan --watch --interval 120   # Re-scan every 2 minutes
+openbroker funding-scan --json                   # JSON (includes assetId per result)
 ```
 
 ## Trading Commands
@@ -293,6 +329,27 @@ openbroker cancel --coin ETH      # Cancel ETH orders only
 openbroker cancel --oid 123456    # Cancel specific order
 ```
 
+### Spot Orders
+Spot trading uses a separate order path with its own asset indices (see Asset IDs section). Pass the base token symbol as `--coin` — quote is always USDC.
+
+```bash
+# Market orders (shortcuts)
+openbroker spot-buy --coin PURR --size 1000
+openbroker spot-sell --coin HYPE --size 5
+
+# Full form (specify --side)
+openbroker spot-order --coin PURR --side buy --size 1000
+
+# Limit orders (add --price)
+openbroker spot-order --coin HYPE --side sell --size 50 --price 25.50
+openbroker spot-order --coin PURR --side buy --size 500 --price 0.20 --tif Alo
+
+# Preview without executing
+openbroker spot-buy --coin PURR --size 500 --dry
+```
+
+**Spot flags:** `--coin`, `--side`, `--size`, `--price` (omit → market order), `--tif` (`Gtc`/`Ioc`/`Alo`, default `Gtc`), `--slippage` (bps, market orders only), `--dry`, `--verbose`.
+
 ## Advanced Execution
 
 ### TWAP (Native Exchange Order)
@@ -302,6 +359,9 @@ openbroker twap --coin ETH --side buy --size 1 --duration 30
 
 # Sell 0.5 BTC over 2 hours without randomized timing
 openbroker twap --coin BTC --side sell --size 0.5 --duration 120 --randomize false
+
+# Reduce-only (close position with TWAP). Note: TWAP uses `--reduce-only`, not `--reduce`
+openbroker twap --coin ETH --side sell --size 1 --duration 30 --reduce-only
 
 # Cancel a running TWAP
 openbroker twap-cancel --coin ETH --twap-id 77738308
@@ -1056,10 +1116,14 @@ export default function(api) {
 openbroker auto run my-strategy --dry       # Test without trading
 openbroker auto run ./funding-scalp.ts      # Run from path
 openbroker auto run my-strategy --poll 5000 # Poll every 5s
+openbroker auto run my-strategy --no-ws     # Disable WebSocket, pure REST polling
 openbroker auto run --example dca --set coin=HYPE --set amount=50 --dry  # Run bundled example
 openbroker auto examples                    # List bundled examples with config
 openbroker auto list                        # Show available scripts
 openbroker auto status                      # Show running automations
+openbroker auto stop <id>                   # Unregister an automation (won't auto-restart)
+openbroker auto report <id>                 # Read the local audit report (logs, trades, metrics) for an automation
+openbroker auto clean                       # Remove stale entries from the registry
 ```
 
 **Plugin tools (for OpenClaw agents):**
@@ -1075,8 +1139,13 @@ openbroker auto status                      # Show running automations
 | `--verbose` | Show debug output | false |
 | `--id <name>` | Custom automation ID | filename |
 | `--poll <ms>` | Poll interval in milliseconds | 10000 |
+| `--no-ws` | Disable WebSocket; fall back to REST-only polling | WebSocket on |
 | `--example <name>` | Run a bundled example automation | - |
 | `--set key=value` | Set config values (repeatable) | - |
+
+**Inspecting automations after they run:**
+- `openbroker auto report <id>` — reads the local SQLite audit trail at `~/.openbroker/automation-audit.sqlite` and prints a summary of logs, write actions, fills, PnL, and custom metrics recorded via `api.audit.record()` / `api.audit.metric()`. Use this to review what a strategy actually did.
+- `openbroker auto clean` — prunes registry entries for automations that are no longer running or whose script file is gone. Safe to run anytime.
 
 **Guidelines for agents writing automations:**
 

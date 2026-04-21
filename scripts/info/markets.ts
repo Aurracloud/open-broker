@@ -6,6 +6,7 @@ import { formatUsd, parseArgs } from '../core/utils.js';
 
 interface MarketDisplay {
   coin: string;
+  assetId: number;
   markPx: number;
   oraclePx: number;
   prevDayPx: number;
@@ -47,6 +48,7 @@ async function main() {
 
       markets.push({
         coin: asset.name,
+        assetId: i,
         markPx,
         oraclePx,
         prevDayPx,
@@ -86,9 +88,12 @@ async function main() {
           const volume24h = parseFloat(ctx.dayNtlVlm);
           const openInterest = parseFloat(ctx.openInterest);
           const change24h = prevDayPx > 0 ? (markPx - prevDayPx) / prevDayPx : 0;
+          let assetId = -1;
+          try { assetId = client.getAssetIndex(coinName); } catch { /* not registered */ }
 
           markets.push({
             coin: coinName,
+            assetId,
             markPx,
             oraclePx,
             prevDayPx,

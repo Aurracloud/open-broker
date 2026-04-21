@@ -11,6 +11,7 @@ Usage: openbroker funding-history --coin <symbol> [options]
 Options:
   --coin <symbol>   Asset symbol (required, e.g. ETH, BTC)
   --hours <n>       Hours of history to fetch (default: 24)
+  --json            Output as JSON (machine-readable)
   --help, -h        Show this help
 
 Examples:
@@ -35,10 +36,13 @@ async function main() {
   }
 
   const hours = parseInt(args.hours as string) || 24;
+  const jsonOutput = args.json as boolean;
   const client = getClient();
 
-  console.log(`Open Broker - ${normalizeCoin(coin)} Funding History (${hours}h)`);
-  console.log('='.repeat(40) + '\n');
+  if (!jsonOutput) {
+    console.log(`Open Broker - ${normalizeCoin(coin)} Funding History (${hours}h)`);
+    console.log('='.repeat(40) + '\n');
+  }
 
   try {
     // Load metadata (needed for HIP-3 coin resolution)
@@ -50,6 +54,13 @@ async function main() {
     const now = Date.now();
     const startTime = now - (hours * 3_600_000);
     const history = await client.getFundingHistory(normalizeCoin(coin), startTime);
+
+    if (jsonOutput) {
+      let assetId = -1;
+      try { assetId = client.getAssetIndex(normalizeCoin(coin)); } catch { /* noop */ }
+      console.log(JSON.stringify({ coin: normalizeCoin(coin), assetId, history }, null, 2));
+      return;
+    }
 
     if (history.length === 0) {
       console.log('No funding history found');

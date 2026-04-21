@@ -6,6 +6,7 @@ import { formatPercent, annualizeFundingRate, parseArgs } from '../core/utils.js
 
 interface FundingDisplay {
   coin: string;
+  assetId: number;
   hourlyRate: number;
   annualizedRate: number;
   premium: number;
@@ -47,6 +48,7 @@ async function main() {
 
       fundingData.push({
         coin: asset.name,
+        assetId: i,
         hourlyRate,
         annualizedRate,
         premium,
@@ -84,8 +86,12 @@ async function main() {
 
           if (!showAll && openInterest < 1000) continue;
 
+          let assetId = -1;
+          try { assetId = client.getAssetIndex(coinName); } catch { /* not registered */ }
+
           fundingData.push({
             coin: coinName,
+            assetId,
             hourlyRate,
             annualizedRate,
             premium: 0,

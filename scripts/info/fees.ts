@@ -9,10 +9,13 @@ function printUsage() {
 Usage: openbroker fees [options]
 
 Options:
-  --help, -h    Show this help
+  --address <0x...>  Look up another account's fees
+  --json             Output as JSON (machine-readable)
+  --help, -h         Show this help
 
 Examples:
   openbroker fees
+  openbroker fees --json
 `);
 }
 
@@ -25,18 +28,26 @@ async function main() {
   }
 
   const targetAddress = args.address as string | undefined;
+  const jsonOutput = args.json as boolean;
   const client = getClient();
   const lookupAddress = targetAddress?.toLowerCase();
 
-  console.log('Open Broker - Fee Schedule');
-  console.log('=========================\n');
+  if (!jsonOutput) {
+    console.log('Open Broker - Fee Schedule');
+    console.log('=========================\n');
 
-  if (targetAddress) {
-    console.log(`Lookup: ${lookupAddress}\n`);
+    if (targetAddress) {
+      console.log(`Lookup: ${lookupAddress}\n`);
+    }
   }
 
   try {
     const fees = await client.getUserFees(lookupAddress);
+
+    if (jsonOutput) {
+      console.log(JSON.stringify(fees, null, 2));
+      return;
+    }
 
     // Fee rates
     console.log('Fee Rates');

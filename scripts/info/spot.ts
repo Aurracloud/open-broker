@@ -9,6 +9,7 @@ interface Args {
   top?: number;
   verbose?: boolean;
   address?: string;
+  json?: boolean;
 }
 
 function parseArgs(): Args {
@@ -26,6 +27,8 @@ function parseArgs(): Args {
       args.address = process.argv[++i].toLowerCase();
     } else if (arg === '--verbose') {
       args.verbose = true;
+    } else if (arg === '--json') {
+      args.json = true;
     } else if (arg === '--help' || arg === '-h') {
       console.log(`
 Spot Markets - View Hyperliquid spot markets and balances
@@ -37,6 +40,7 @@ Options:
   --balances           Show your spot token balances
   --address <0x...>    Look up another account's spot balances (with --balances)
   --top <n>            Show only top N markets by volume
+  --json               Output as JSON (machine-readable)
   --verbose            Show detailed output
   --help               Show this help
 
@@ -85,9 +89,14 @@ async function main() {
   // Show balances
   if (args.balances) {
     const lookupAddress = args.address ?? client.address;
-    console.log(`Fetching spot balances for ${lookupAddress}...\n`);
+    if (!args.json) console.log(`Fetching spot balances for ${lookupAddress}...\n`);
 
     const balances = await client.getSpotBalances(args.address);
+
+    if (args.json) {
+      console.log(JSON.stringify(balances.balances ?? [], null, 2));
+      return;
+    }
 
     if (!balances.balances || balances.balances.length === 0) {
       console.log('No spot token balances found.');
@@ -112,17 +121,20 @@ async function main() {
   }
 
   // Show markets
-  console.log('Fetching spot market data...\n');
+  if (!args.json) console.log('Fetching spot market data...\n');
 
   const spotData = await client.getSpotMetaAndAssetCtxs();
 
   interface SpotMarket {
     name: string;
     index: number;
+    assetId: number;
     price: string;
     volume24h: number;
     change24h: string;
     tokens: [number, number];
+    base?: string;
+    quote?: string;
   }
 
   const markets: SpotMarket[] = [];
@@ -155,10 +167,13 @@ async function main() {
     markets.push({
       name: pair.name,
       index: pair.index,
+      assetId: 10000 + pair.index,
       price: ctx.markPx,
       volume24h: parseFloat(ctx.dayNtlVlm || '0'),
       change24h: formatChange(ctx.markPx, ctx.prevDayPx),
       tokens: pair.tokens,
+      base: tokenNameMap.get(pair.tokens[0]),
+      quote: tokenNameMap.get(pair.tokens[1]),
     });
   }
 
@@ -167,6 +182,11 @@ async function main() {
 
   // Apply top filter
   const displayMarkets = args.top ? markets.slice(0, args.top) : markets;
+
+  if (args.json) {
+    console.log(JSON.stringify(displayMarkets, null, 2));
+    return;
+  }
 
   if (displayMarkets.length === 0) {
     console.log(args.coin ? `No spot markets found for "${args.coin}"` : 'No spot markets found');
@@ -180,8 +200,8 @@ async function main() {
   }
 
   console.log(`=== Spot Markets (${displayMarkets.length} total) ===\n`);
-  console.log('Pair           Price            24h Volume    24h Change   Base/Quote');
-  console.log('-'.repeat(80));
+  console.log('Pair           AssetID    Price            24h Volume    24h Change   Base/Quote');
+  console.log('-'.repeat(92));
 
   for (const m of displayMarkets) {
     const baseToken = tokenMap.get(m.tokens[0]);
@@ -189,7 +209,7 @@ async function main() {
     const pairStr = `${baseToken?.name || '?'}/${quoteToken?.name || '?'}`;
 
     console.log(
-      `${m.name.padEnd(14)} ${formatPrice(m.price).padStart(16)} ${formatVolume(m.volume24h).padStart(13)} ${m.change24h.padStart(11)}   ${pairStr}`
+      `${m.name.padEnd(14)} ${String(m.assetId).padStart(7)}    ${formatPrice(m.price).padStart(16)} ${formatVolume(m.volume24h).padStart(13)} ${m.change24h.padStart(11)}   ${pairStr}`
     );
   }
 

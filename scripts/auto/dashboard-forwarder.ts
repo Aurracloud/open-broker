@@ -10,6 +10,7 @@
 import type { AutomationAudit } from './types.js';
 
 const DASHBOARD_URL = process.env.OB_DASHBOARD_URL; // e.g. "http://localhost:3001"
+const DASHBOARD_API_KEY = process.env.OB_DASHBOARD_API_KEY || '';
 const VAULT_ADDRESS = process.env.HYPERSTABLE_VAULT_ADDRESS || process.env.VAULT || '';
 
 function postJSON(path: string, body: unknown): void {
@@ -17,9 +18,14 @@ function postJSON(path: string, body: unknown): void {
 
   const url = `${DASHBOARD_URL}/api/vaults/${VAULT_ADDRESS.toLowerCase()}${path}`;
 
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (DASHBOARD_API_KEY) {
+    headers['Authorization'] = `Bearer ${DASHBOARD_API_KEY}`;
+  }
+
   fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(5_000),
   }).catch(() => {

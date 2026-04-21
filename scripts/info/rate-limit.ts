@@ -9,6 +9,7 @@ function printUsage() {
 Usage: openbroker rate-limit [options]
 
 Options:
+  --json        Output as JSON (machine-readable)
   --help, -h    Show this help
 
 Examples:
@@ -24,13 +25,21 @@ async function main() {
     process.exit(0);
   }
 
+  const jsonOutput = args.json as boolean;
   const client = getClient();
 
-  console.log('Open Broker - API Rate Limit');
-  console.log('===========================\n');
+  if (!jsonOutput) {
+    console.log('Open Broker - API Rate Limit');
+    console.log('===========================\n');
+  }
 
   try {
     const rl = await client.getUserRateLimit();
+
+    if (jsonOutput) {
+      console.log(JSON.stringify(rl, null, 2));
+      return;
+    }
 
     const used = rl.nRequestsUsed;
     const cap = rl.nRequestsCap;

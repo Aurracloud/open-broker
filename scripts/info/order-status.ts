@@ -11,6 +11,7 @@ Usage: openbroker order-status --oid <order-id>
 Options:
   --oid <id>          Order ID (number) or client order ID (hex string) — required
   --address <0x...>   Look up order on another account
+  --json              Output as JSON (machine-readable)
   --help, -h          Show this help
 
 Examples:
@@ -37,14 +38,22 @@ async function main() {
 
   const oid = oidArg.startsWith('0x') ? oidArg : parseInt(oidArg);
   const targetAddress = args.address as string | undefined;
+  const jsonOutput = args.json as boolean;
   const client = getClient();
   const lookupAddress = targetAddress?.toLowerCase();
 
-  console.log('Open Broker - Order Status');
-  console.log('=========================\n');
+  if (!jsonOutput) {
+    console.log('Open Broker - Order Status');
+    console.log('=========================\n');
+  }
 
   try {
     const result = await client.getOrderStatus(oid, lookupAddress);
+
+    if (jsonOutput) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
 
     if (result.status === 'unknownOid') {
       console.log(`Order ${oidArg} not found`);

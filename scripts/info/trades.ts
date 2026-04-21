@@ -11,6 +11,7 @@ Usage: openbroker trades --coin <symbol> [options]
 Options:
   --coin <symbol>   Asset symbol (required, e.g. ETH, BTC)
   --top <n>         Show last N trades (default: 30)
+  --json            Output as JSON (machine-readable)
   --help, -h        Show this help
 
 Examples:
@@ -35,10 +36,13 @@ async function main() {
   }
 
   const top = parseInt(args.top as string) || 30;
+  const jsonOutput = args.json as boolean;
   const client = getClient();
 
-  console.log(`Open Broker - ${normalizeCoin(coin)} Recent Trades`);
-  console.log('='.repeat(40) + '\n');
+  if (!jsonOutput) {
+    console.log(`Open Broker - ${normalizeCoin(coin)} Recent Trades`);
+    console.log('='.repeat(40) + '\n');
+  }
 
   try {
     // Load metadata (needed for HIP-3 coin resolution)
@@ -52,6 +56,13 @@ async function main() {
     // Most recent first
     trades.sort((a, b) => b.time - a.time);
     trades = trades.slice(0, top);
+
+    if (jsonOutput) {
+      let assetId = -1;
+      try { assetId = client.getAssetIndex(normalizeCoin(coin)); } catch { /* noop */ }
+      console.log(JSON.stringify({ coin: normalizeCoin(coin), assetId, trades }, null, 2));
+      return;
+    }
 
     if (trades.length === 0) {
       console.log('No recent trades found');

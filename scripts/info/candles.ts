@@ -21,6 +21,7 @@ Options:
   --interval <interval> Candle interval (default: 1h)
                        Valid: ${VALID_INTERVALS.join(', ')}
   --bars <n>           Number of bars to fetch (default: 24)
+  --json               Output as JSON (machine-readable)
   --help, -h           Show this help
 
 Examples:
@@ -59,10 +60,13 @@ async function main() {
   }
 
   const bars = parseInt(args.bars as string) || 24;
+  const jsonOutput = args.json as boolean;
   const client = getClient();
 
-  console.log(`Open Broker - ${normalizeCoin(coin)} Candles (${interval})`);
-  console.log('='.repeat(40) + '\n');
+  if (!jsonOutput) {
+    console.log(`Open Broker - ${normalizeCoin(coin)} Candles (${interval})`);
+    console.log('='.repeat(40) + '\n');
+  }
 
   try {
     // Load metadata (needed for HIP-3 coin resolution)
@@ -74,6 +78,13 @@ async function main() {
     const now = Date.now();
     const startTime = now - (bars * (INTERVAL_MS[interval] || 3_600_000));
     const candles = await client.getCandleSnapshot(normalizeCoin(coin), interval, startTime);
+
+    if (jsonOutput) {
+      let assetId = -1;
+      try { assetId = client.getAssetIndex(normalizeCoin(coin)); } catch { /* noop */ }
+      console.log(JSON.stringify({ coin: normalizeCoin(coin), assetId, interval, candles }, null, 2));
+      return;
+    }
 
     if (candles.length === 0) {
       console.log('No candle data found');

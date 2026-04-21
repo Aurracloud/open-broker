@@ -112,7 +112,7 @@ export function loadConfig(): OpenBrokerConfig {
     // Show warning once
     if (!readOnlyWarningShown) {
       readOnlyWarningShown = true;
-      console.log('\x1b[33m⚠️  Not configured for trading. Run "openbroker setup" to enable trades.\x1b[0m\n');
+      console.error('\x1b[33m⚠️  Not configured for trading. Run "openbroker setup" to enable trades.\x1b[0m\n');
     }
   }
 

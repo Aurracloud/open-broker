@@ -22,8 +22,10 @@ export function resolveScriptPath(nameOrPath: string): string {
     return nameOrPath;
   }
 
-  // Relative to cwd
-  const cwdPath = path.resolve(process.cwd(), nameOrPath);
+  // Relative to the user's original cwd (not the openbroker package root that
+  // `bin/openbroker.js` chdirs to before spawning tsx).
+  const userCwd = process.env.OPENBROKER_CWD || process.cwd();
+  const cwdPath = path.resolve(userCwd, nameOrPath);
   if (existsSync(cwdPath)) return cwdPath;
 
   // Relative to ~/.openbroker/automations/

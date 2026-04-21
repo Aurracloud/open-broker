@@ -7,6 +7,7 @@ interface Args {
   query: string;
   type?: 'perp' | 'spot' | 'hip3' | 'all';
   verbose?: boolean;
+  json?: boolean;
 }
 
 function parseArgs(): Args {
@@ -23,6 +24,8 @@ function parseArgs(): Args {
       }
     } else if (arg === '--verbose') {
       args.verbose = true;
+    } else if (arg === '--json') {
+      args.json = true;
     } else if (arg === '--help' || arg === '-h') {
       console.log(`
 Search Markets - Find assets across all Hyperliquid markets
@@ -32,6 +35,7 @@ Usage: npx tsx scripts/info/search-markets.ts --query <search> [options]
 Options:
   --query <search>  Search term (required) - matches coin name
   --type <type>     Filter by market type: perp, spot, hip3, or all (default: all)
+  --json            Output as JSON (machine-readable)
   --verbose         Show detailed output
   --help            Show this help
 
@@ -40,6 +44,7 @@ Examples:
   npx tsx scripts/info/search-markets.ts --query BTC        # Find all BTC markets
   npx tsx scripts/info/search-markets.ts --query ETH --type perp  # ETH perps only
   npx tsx scripts/info/search-markets.ts --query PURR --type spot # PURR spot only
+  npx tsx scripts/info/search-markets.ts --query HYPE --json      # JSON output
 `);
       process.exit(0);
     } else if (!args.query && !arg.startsWith('-')) {
@@ -85,18 +90,23 @@ async function main() {
   client.verbose = args.verbose ?? false;
 
   const query = args.query.toUpperCase();
-  console.log(`Searching for "${query}" across all markets...\n`);
+  if (!args.json) {
+    console.log(`Searching for "${query}" across all markets...\n`);
+  }
 
-  const results: Array<{
+  interface Result {
     type: 'perp' | 'spot' | 'hip3';
     provider: string;
     coin: string;
+    assetId: number;
     price: string;
     volume24h: number;
     funding?: string;
     maxLeverage?: number;
     openInterest?: string;
-  }> = [];
+  }
+
+  const results: Result[] = [];
 
   // Search main perps
   if (args.type === 'all' || args.type === 'perp') {
@@ -110,6 +120,7 @@ async function main() {
           type: 'perp',
           provider: 'Hyperliquid',
           coin: asset.name,
+          assetId: i,
           price: ctx.markPx,
           volume24h: parseFloat(ctx.dayNtlVlm),
           funding: ctx.funding,
@@ -126,7 +137,7 @@ async function main() {
       // On testnet, load specific dex if query is "dex:COIN" format
       if (args.query.includes(':')) {
         await client.loadSingleHip3Dex(args.query.split(':')[0]);
-      } else {
+      } else if (!args.json) {
         console.log('  (Testnet: HIP-3 dexes not auto-loaded. Use "dexName:COIN" to search a specific dex.)\n');
       }
     }
@@ -143,10 +154,13 @@ async function main() {
           if (!asset || !ctx) continue;
 
           if (asset.name.toUpperCase().includes(query)) {
+            let assetId = -1;
+            try { assetId = client.getAssetIndex(asset.name); } catch { /* not registered */ }
             results.push({
               type: 'hip3',
               provider: dexData.dexName || `HIP-3 DEX ${dexIdx}`,
               coin: asset.name,
+              assetId,
               price: ctx.markPx,
               volume24h: parseFloat(ctx.dayNtlVlm || '0'),
               funding: ctx.funding,
@@ -199,6 +213,7 @@ async function main() {
             type: 'spot',
             provider: 'Spot',
             coin: displayName,
+            assetId: 10000 + pair.index,
             price: ctx.markPx,
             volume24h: parseFloat(ctx.dayNtlVlm || '0'),
           });
@@ -212,20 +227,25 @@ async function main() {
   // Sort by volume
   results.sort((a, b) => b.volume24h - a.volume24h);
 
+  if (args.json) {
+    console.log(JSON.stringify(results, null, 2));
+    return;
+  }
+
   if (results.length === 0) {
     console.log(`No markets found matching "${query}"`);
     return;
   }
 
   console.log(`Found ${results.length} market(s) matching "${query}":\n`);
-  console.log('Type     Provider         Coin           Price            24h Volume    Funding (Ann.)  OI');
-  console.log('-'.repeat(100));
+  console.log('Type     Provider         Coin           AssetID    Price            24h Volume    Funding (Ann.)  OI');
+  console.log('-'.repeat(112));
 
   for (const m of results) {
     const typeStr = m.type === 'hip3' ? 'HIP-3' : m.type.charAt(0).toUpperCase() + m.type.slice(1);
     const oi = m.openInterest ? formatVolume(parseFloat(m.openInterest)) : '-';
     console.log(
-      `${typeStr.padEnd(8)} ${m.provider.padEnd(16)} ${m.coin.padEnd(14)} ${formatPrice(m.price).padStart(16)} ${formatVolume(m.volume24h).padStart(13)} ${(m.funding ? formatFunding(m.funding) : '-').padStart(14)} ${oi.padStart(10)}`
+      `${typeStr.padEnd(8)} ${m.provider.padEnd(16)} ${m.coin.padEnd(14)} ${String(m.assetId).padStart(7)}    ${formatPrice(m.price).padStart(16)} ${formatVolume(m.volume24h).padStart(13)} ${(m.funding ? formatFunding(m.funding) : '-').padStart(14)} ${oi.padStart(10)}`
     );
   }
 
@@ -245,11 +265,11 @@ async function main() {
     const perpsWithFunding = markets.filter((m) => m.funding && m.type !== 'spot');
     if (perpsWithFunding.length > 1) {
       console.log(`\n=== ${coin} Funding Comparison ===\n`);
-      console.log('Provider         Coin           Funding (Ann.)    Price');
-      console.log('-'.repeat(65));
+      console.log('Provider         Coin           AssetID    Funding (Ann.)    Price');
+      console.log('-'.repeat(78));
       for (const m of perpsWithFunding.sort((a, b) => parseFloat(b.funding!) - parseFloat(a.funding!))) {
         console.log(
-          `${m.provider.padEnd(16)} ${m.coin.padEnd(14)} ${formatFunding(m.funding!).padStart(14)}    ${formatPrice(m.price)}`
+          `${m.provider.padEnd(16)} ${m.coin.padEnd(14)} ${String(m.assetId).padStart(7)}    ${formatFunding(m.funding!).padStart(14)}    ${formatPrice(m.price)}`
         );
       }
     }

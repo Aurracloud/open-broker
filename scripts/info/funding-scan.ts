@@ -32,6 +32,7 @@ Examples:
 
 interface FundingScanResult {
   coin: string;
+  assetId: number;
   dex: string;
   hourlyRate: number;
   annualizedPct: number;
@@ -69,9 +70,14 @@ async function scanFunding(client: ReturnType<typeof getClient>, options: {
 
       // API returns HIP-3 names already prefixed (e.g., "xyz:CL")
       const coin = asset.name;
+      let assetId = isMain ? i : -1;
+      if (!isMain) {
+        try { assetId = client.getAssetIndex(coin); } catch { /* not registered */ }
+      }
 
       results.push({
         coin,
+        assetId,
         dex: dexData.dexName ?? 'main',
         hourlyRate,
         annualizedPct,

@@ -49,11 +49,13 @@ async function main() {
 
     const response = await client.twapCancel(coin, twapId);
 
+    // SDK returns a success-only response shape; failures throw and are
+    // caught by the surrounding try/catch. `status` is the success literal.
     const status = response.response.data.status;
     if (typeof status === 'string' && status === 'success') {
       console.log(`\nTWAP order ${twapId} cancelled successfully.`);
-    } else if (typeof status === 'object' && 'error' in status) {
-      console.error(`\nFailed to cancel TWAP: ${status.error}`);
+    } else {
+      console.error(`\nUnexpected TWAP cancel response status: ${JSON.stringify(status)}`);
       process.exit(1);
     }
   } catch (error) {

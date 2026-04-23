@@ -39,7 +39,7 @@ async function main() {
 
       const hourlyRate = parseFloat(ctx.funding);
       const annualizedRate = annualizeFundingRate(hourlyRate);
-      const premium = parseFloat(ctx.premium);
+      const premium = parseFloat(ctx.premium ?? '0');
       const openInterest = parseFloat(ctx.openInterest);
       const markPx = parseFloat(ctx.markPx);
 

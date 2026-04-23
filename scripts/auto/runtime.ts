@@ -569,21 +569,19 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
           }, 'ws');
         }
 
-        // Also emit order_filled for backward compatibility
-        if (update.status === 'filled' && eventBus.has('order_filled')) {
-          void emitAutomationEvent('order_filled', {
-            coin: update.order.coin,
-            oid: update.order.oid,
-            side: update.order.side === 'B' ? 'buy' : 'sell',
-            size: parseFloat(update.order.sz),
-            price: parseFloat(update.order.limitPx),
-          }, 'ws');
-        }
+        // NOTE: order_filled is emitted from the userFill handler below, not from
+        // here. The previous implementation fired it from orderUpdate.status
+        // === 'filled' using update.order.sz as the size, but that field is the
+        // REMAINING size (0 on a terminal fill), not the fill delta — so every
+        // consumer saw size=0. Additionally, Hyperliquid does not emit
+        // orderUpdate events for pure partial fills that don't transition
+        // status, so partial fills were silently dropped entirely. Sourcing
+        // order_filled from userFill fixes both issues: sz there IS the fill
+        // delta, and the userFills stream fires on every fill (partial and
+        // terminal).
       });
 
       ws.on('userFill', (fill) => {
-        // userFill events are already covered by order_update with status=filled
-        // But this provides the realized PnL and fee data that order_update doesn't have
         audit.recordFill({
           coin: fill.coin,
           side: fill.side === 'B' ? 'buy' : 'sell',
@@ -596,6 +594,25 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
           crossed: fill.crossed,
         }, fill.time);
         log.debug(`Fill: ${fill.side === 'B' ? 'BUY' : 'SELL'} ${fill.sz} ${fill.coin} @ ${fill.px} (PnL: ${fill.closedPnl})`);
+
+        // Emit order_filled with the authoritative fill delta + fee/pnl from
+        // the userFills WS stream. Covers both partial and terminal fills.
+        if (eventBus.has('order_filled')) {
+          const size = parseFloat(fill.sz);
+          const price = parseFloat(fill.px);
+          const fee = parseFloat(fill.fee);
+          const closedPnl = parseFloat(fill.closedPnl);
+          void emitAutomationEvent('order_filled', {
+            coin: fill.coin,
+            oid: fill.oid,
+            side: fill.side === 'B' ? 'buy' : 'sell',
+            size,
+            price,
+            fee: Number.isFinite(fee) ? fee : undefined,
+            closedPnl: Number.isFinite(closedPnl) ? closedPnl : undefined,
+            crossed: fill.crossed,
+          }, 'ws');
+        }
       });
 
       ws.on('userEvent', (event) => {

@@ -46,7 +46,23 @@ export interface AutomationEventPayloads {
   position_changed: { coin: string; oldSize: number; newSize: number; entryPrice: number };
   pnl_threshold: { coin: string; unrealizedPnl: number; changePct: number; positionValue: number };
   margin_warning: { marginUsedPct: number; equity: number; marginUsed: number };
-  order_filled: { coin: string; oid: number; side: 'buy' | 'sell'; size: number; price: number };
+  /**
+   * Fires on every trade fill — partial and terminal — sourced from the
+   * Hyperliquid `userFills` WS stream. `size` is the fill delta (NOT remaining
+   * size of the order). `fee` and `closedPnl` are in USD; `crossed` is true
+   * when this side was the taker. Fee/pnl/crossed are optional so that older
+   * consumers that only read coin/oid/side/size/price keep working.
+   */
+  order_filled: {
+    coin: string;
+    oid: number;
+    side: 'buy' | 'sell';
+    size: number;
+    price: number;
+    fee?: number;
+    closedPnl?: number;
+    crossed?: boolean;
+  };
   /** Real-time order lifecycle event via WebSocket (filled, canceled, rejected, triggered, etc.) */
   order_update: {
     coin: string;

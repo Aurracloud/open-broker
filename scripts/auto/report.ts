@@ -338,12 +338,12 @@ function renderTextReport(data: ReturnType<typeof loadReport>, watchMode = false
   console.log('\nEquity');
   console.log('------');
   if (report.equity.first) {
-    console.log(`First snapshot: ${formatUsd(report.equity.first.equity)} @ ${formatTimestamp(Number(report.equity.first.timestamp))}`);
+    console.log(`First snapshot: ${formatUsd(Number(report.equity.first.equity))} @ ${formatTimestamp(Number(report.equity.first.timestamp))}`);
   } else {
     console.log('First snapshot: -');
   }
   if (report.equity.latest) {
-    console.log(`Latest snapshot:${formatUsd(report.equity.latest.equity)} @ ${formatTimestamp(Number(report.equity.latest.timestamp))}`);
+    console.log(`Latest snapshot:${formatUsd(Number(report.equity.latest.equity))} @ ${formatTimestamp(Number(report.equity.latest.timestamp))}`);
   } else {
     console.log('Latest snapshot:-');
   }

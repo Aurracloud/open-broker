@@ -123,17 +123,15 @@ async function main() {
       leverage,
     );
 
+    // SDK's TwapOrderSuccessResponse excludes the error variant — the SDK
+    // throws on failure and the surrounding try/catch handles that. So
+    // `status` only ever carries `{ running }` here.
     const status = response.response.data.status;
-    if ('running' in status) {
-      console.log(`TWAP order placed successfully!`);
-      console.log(`TWAP ID: ${status.running.twapId}`);
-      console.log(`\nThe exchange is now executing your TWAP order over ${formatDuration(durationMinutes * 60)}.`);
-      console.log(`To cancel: openbroker twap-cancel --coin ${coin} --twap-id ${status.running.twapId}`);
-      console.log(`To check status: openbroker twap-status`);
-    } else if ('error' in status) {
-      console.error(`TWAP order failed: ${status.error}`);
-      process.exit(1);
-    }
+    console.log(`TWAP order placed successfully!`);
+    console.log(`TWAP ID: ${status.running.twapId}`);
+    console.log(`\nThe exchange is now executing your TWAP order over ${formatDuration(durationMinutes * 60)}.`);
+    console.log(`To cancel: openbroker twap-cancel --coin ${coin} --twap-id ${status.running.twapId}`);
+    console.log(`To check status: openbroker twap-status`);
   } catch (error) {
     console.error('Error:', error instanceof Error ? error.message : error);
     process.exit(1);

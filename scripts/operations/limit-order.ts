@@ -129,7 +129,7 @@ async function main() {
     console.log('\nResult');
     console.log('------');
 
-    if (response.status === 'ok' && response.response) {
+    if (response.status === 'ok' && response.response && typeof response.response !== 'string') {
       const statuses = response.response.data.statuses;
       for (const status of statuses) {
         if (status.filled) {

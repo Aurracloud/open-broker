@@ -81,11 +81,18 @@ export interface CancelResponse {
 
 // ============ Market Data Types ============
 
+// Shape matches the upstream @nktkas/hyperliquid SDK response. Fields like
+// `onlyIsolated` and `premium` are absent-or-null in practice for some assets,
+// so they're modelled as optional / nullable. Index signature absorbs any
+// additional SDK fields we don't consume here (marginTableId, growthMode, …).
 export interface AssetMeta {
   name: string;
   szDecimals: number;
   maxLeverage: number;
-  onlyIsolated: boolean;
+  onlyIsolated?: boolean;
+  isDelisted?: boolean;
+  marginTableId?: number;
+  [key: string]: unknown;
 }
 
 export interface AssetCtx {
@@ -93,11 +100,13 @@ export interface AssetCtx {
   openInterest: string;
   prevDayPx: string;
   dayNtlVlm: string;
-  premium: string;
+  premium: string | null;
   oraclePx: string;
   markPx: string;
-  midPx?: string;
-  impactPxs?: [string, string];
+  midPx?: string | null;
+  impactPxs?: [string, string] | string[] | null;
+  dayBaseVlm?: string;
+  [key: string]: unknown;
 }
 
 export interface Meta {

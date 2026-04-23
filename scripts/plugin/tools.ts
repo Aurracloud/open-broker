@@ -1385,24 +1385,21 @@ export function createTools(watcherOrCtx: PositionWatcher | null | ToolsContext)
           const midPrice = parseFloat(mids[coin]);
 
           const response = await client.twapOrder(coin, isBuy, size, durationMinutes, randomize, reduceOnly, leverage);
+          // SDK's TwapOrderSuccessResponse excludes errors; they'd throw and
+          // be caught below. Status is always `{ running }` on this branch.
           const status = response.response.data.status;
 
-          if ('running' in status) {
-            return json({
-              twapId: status.running.twapId,
-              coin,
-              side: isBuy ? 'buy' : 'sell',
-              size,
-              durationMinutes,
-              randomize,
-              reduceOnly,
-              estimatedNotional: midPrice ? midPrice * size : undefined,
-              midPrice: midPrice || undefined,
-            });
-          } else if ('error' in status) {
-            return error(status.error);
-          }
-          return error('Unexpected response');
+          return json({
+            twapId: status.running.twapId,
+            coin,
+            side: isBuy ? 'buy' : 'sell',
+            size,
+            durationMinutes,
+            randomize,
+            reduceOnly,
+            estimatedNotional: midPrice ? midPrice * size : undefined,
+            midPrice: midPrice || undefined,
+          });
         } catch (err) {
           return error(err instanceof Error ? err.message : String(err));
         }
@@ -1428,14 +1425,13 @@ export function createTools(watcherOrCtx: PositionWatcher | null | ToolsContext)
         try {
           const client = getClient();
           const response = await client.twapCancel(coin, twapId);
+          // SDK returns the success-only response; failures throw.
           const status = response.response.data.status;
 
           if (typeof status === 'string' && status === 'success') {
             return json({ cancelled: true, coin, twapId });
-          } else if (typeof status === 'object' && 'error' in status) {
-            return error(status.error);
           }
-          return error('Unexpected response');
+          return error(`Unexpected TWAP cancel status: ${JSON.stringify(status)}`);
         } catch (err) {
           return error(err instanceof Error ? err.message : String(err));
         }

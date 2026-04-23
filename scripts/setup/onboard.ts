@@ -387,8 +387,10 @@ Examples:
     return setupApiWallet();
   }
 
-  // Options 1 & 2: Master wallet flow
-  let privateKey: `0x${string}`;
+  // Options 1 & 2: Master wallet flow. Initialised in the branches below —
+  // the compiler can't prove the while-loop in option 2 assigns, so we use
+  // `| undefined` and narrow at use sites (`assertDefined`).
+  let privateKey: `0x${string}` | undefined;
 
   if (choice === '2') {
     // User has existing key
@@ -415,6 +417,10 @@ Examples:
     console.log('\nGenerating new wallet...');
     privateKey = generatePrivateKey();
     console.log('✅ New wallet created');
+  }
+
+  if (!privateKey) {
+    throw new Error('Internal error: privateKey was not set by onboarding flow.');
   }
 
   // Derive account from private key

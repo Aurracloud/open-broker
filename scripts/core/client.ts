@@ -9,6 +9,8 @@ import type {
   OrderResponse,
   CancelResponse,
   MetaAndAssetCtxs,
+  AssetMeta,
+  AssetCtx,
   ClearinghouseState,
   OpenOrder,
 } from './types.js';
@@ -256,13 +258,16 @@ export class HyperliquidClient {
     }
     this.log('metaAndAssetCtxs response:', JSON.stringify(response, null, 2).slice(0, 500) + '...');
 
-    this.meta = {
-      meta: { universe: response[0].universe },
-      assetCtxs: response[1],
+    // Build the narrowed value locally so neither narrowing nor the `| null`
+    // field type can be lost across `await` / method-call boundaries below.
+    const meta: MetaAndAssetCtxs = {
+      meta: { universe: response[0].universe as AssetMeta[] },
+      assetCtxs: response[1] as AssetCtx[],
     };
+    this.meta = meta;
 
     // Build lookup maps for main dex
-    this.meta.meta.universe.forEach((asset, index) => {
+    meta.meta.universe.forEach((asset, index) => {
       this.assetMap.set(asset.name, index);
       this.szDecimalsMap.set(asset.name, asset.szDecimals);
       this.coinDexMap.set(asset.name, { dexName: null, dexIdx: 0, localName: asset.name });
@@ -274,7 +279,7 @@ export class HyperliquidClient {
       this.hip3Loaded = true;
     }
 
-    return this.meta;
+    return meta;
   }
 
   /**
@@ -782,7 +787,19 @@ export class HyperliquidClient {
           tokenId,
         }),
       });
-      const data = await response.json();
+      const data = await response.json() as {
+        name: string;
+        maxSupply: string;
+        totalSupply: string;
+        circulatingSupply: string;
+        szDecimals: number;
+        weiDecimals: number;
+        midPx: string;
+        markPx: string;
+        prevDayPx: string;
+        deployer: string;
+        deployTime: string;
+      } | null;
       this.log('tokenDetails response:', JSON.stringify(data).slice(0, 500));
       return data;
     } catch {
@@ -807,7 +824,10 @@ export class HyperliquidClient {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ type: 'predictedFundings' }),
     });
-    const data = await response.json();
+    const data = await response.json() as Array<[
+      string,
+      Array<[string, { fundingRate: string; nextFundingTime: number }]>
+    ]>;
     this.log('predictedFundings response length:', data?.length);
     return data;
   }
@@ -827,7 +847,7 @@ export class HyperliquidClient {
   }> {
     this.log('Fetching l2Book for:', coin);
     // API accepts prefixed names directly (e.g., "xyz:CL")
-    let response;
+    let response: Awaited<ReturnType<typeof this.info.l2Book>>;
     try {
       response = await this.info.l2Book({ coin });
     } catch (error) {
@@ -838,8 +858,12 @@ export class HyperliquidClient {
       throw new Error(`l2Book(${coin}) failed: ${this.describeError(error)}`);
     }
 
-    const bids = response.levels[0] as Array<{ px: string; sz: string; n: number }>;
-    const asks = response.levels[1] as Array<{ px: string; sz: string; n: number }>;
+    if (!response || !Array.isArray(response.levels)) {
+      throw new Error(`l2Book(${coin}) returned empty/malformed payload.`);
+    }
+
+    const bids = (response.levels[0] ?? []) as Array<{ px: string; sz: string; n: number }>;
+    const asks = (response.levels[1] ?? []) as Array<{ px: string; sz: string; n: number }>;
 
     const bestBid = bids.length > 0 ? parseFloat(bids[0].px) : 0;
     const bestAsk = asks.length > 0 ? parseFloat(asks[0].px) : 0;
@@ -1015,7 +1039,7 @@ export class HyperliquidClient {
           user: user ?? this.address,
         }),
       });
-      const data = await response.json();
+      const data = await response.json() as string | { abstraction?: string; mode?: string } | null;
       this.log('userAbstraction response:', JSON.stringify(data));
 
       // API may return a bare string or an object. Normalize to string for matching.
@@ -1194,10 +1218,13 @@ export class HyperliquidClient {
     }
 
     try {
+      // approveBuilderFee is a wallet-level authorization (not a vault action)
+      // and the SDK's `opts` parameter only carries an AbortSignal. Do not pass
+      // vaultParam here — the signature is { signal? }, not a vault wrapper.
       const response = await this.exchange.approveBuilderFee({
         builder: targetBuilder as `0x${string}`,
         maxFeeRate,
-      }, this.vaultParam);
+      });
       this.log('approveBuilderFee response:', response);
       return { status: 'ok', response };
     } catch (error) {
@@ -1242,7 +1269,18 @@ export class HyperliquidClient {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-    const data = await response.json();
+    const data = await response.json() as Array<{
+      time: number;
+      hash: string;
+      delta: {
+        type: 'funding';
+        coin: string;
+        usdc: string;
+        szi: string;
+        fundingRate: string;
+        nSamples: number | null;
+      };
+    }>;
     this.log('userFunding response length:', data?.length);
     return data;
   }
@@ -1285,7 +1323,25 @@ export class HyperliquidClient {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-    const data = await response.json();
+    const data = await response.json() as Array<{
+      coin: string;
+      px: string;
+      sz: string;
+      side: 'B' | 'A';
+      time: number;
+      startPosition: string;
+      dir: string;
+      closedPnl: string;
+      fee: string;
+      hash: string;
+      oid: number;
+      tid: number;
+      crossed: boolean;
+      feeToken: string;
+      twapId: number | null;
+      cloid: string | null;
+      builderFee: string | null;
+    }>;
     this.log('userFills response length:', data?.length);
     return data;
   }
@@ -1328,7 +1384,28 @@ export class HyperliquidClient {
         user: user ?? this.address,
       }),
     });
-    const data = await response.json();
+    const data = await response.json() as Array<{
+      order: {
+        coin: string;
+        side: string;
+        limitPx: string;
+        sz: string;
+        origSz: string;
+        oid: number;
+        timestamp: number;
+        orderType: string;
+        tif: string | null;
+        cloid: string | null;
+        triggerCondition: string;
+        triggerPx: string;
+        isTrigger: boolean;
+        isPositionTpsl: boolean;
+        reduceOnly: boolean;
+        children: unknown[];
+      };
+      status: string;
+      statusTimestamp: number;
+    }>;
     this.log('historicalOrders response length:', data?.length);
     return data;
   }
@@ -1374,7 +1451,30 @@ export class HyperliquidClient {
         oid: typeof oid === 'string' ? oid : oid,
       }),
     });
-    const data = await response.json();
+    const data = await response.json() as {
+      status: string;
+      order?: {
+        order: {
+          coin: string;
+          side: string;
+          limitPx: string;
+          sz: string;
+          origSz: string;
+          oid: number;
+          timestamp: number;
+          orderType: string;
+          tif: string | null;
+          cloid: string | null;
+          triggerCondition: string;
+          triggerPx: string;
+          isTrigger: boolean;
+          isPositionTpsl: boolean;
+          reduceOnly: boolean;
+        };
+        status: string;
+        statusTimestamp: number;
+      };
+    };
     this.log('orderStatus response:', JSON.stringify(data).slice(0, 500));
     return data;
   }
@@ -1409,7 +1509,20 @@ export class HyperliquidClient {
         user: user ?? this.address,
       }),
     });
-    const data = await response.json();
+    const data = await response.json() as {
+      dailyUserVlm: Array<{ date: string; exchange: string; userCross: string; userAdd: string }>;
+      feeSchedule: Record<string, unknown>;
+      userCrossRate: string;
+      userAddRate: string;
+      userSpotCrossRate: string;
+      userSpotAddRate: string;
+      activeReferralDiscount: string;
+      trial: unknown;
+      feeTrialEscrow: string;
+      nextTrialAvailableTimestamp: unknown;
+      stakingLink: { stakingUser: string; status: string } | null;
+      activeStakingDiscount: { basisPoints: number; discountRate: string } | null;
+    };
     this.log('userFees response:', JSON.stringify(data).slice(0, 500));
     return data;
   }
@@ -1448,7 +1561,18 @@ export class HyperliquidClient {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ type: 'candleSnapshot', req }),
     });
-    const data = await response.json();
+    const data = await response.json() as Array<{
+      t: number;
+      T: number;
+      s: string;
+      i: string;
+      o: string;
+      c: string;
+      h: string;
+      l: string;
+      v: string;
+      n: number;
+    }>;
     this.log('candleSnapshot response length:', data?.length);
     return data;
   }
@@ -1480,7 +1604,12 @@ export class HyperliquidClient {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-    const data = await response.json();
+    const data = await response.json() as Array<{
+      coin: string;
+      fundingRate: string;
+      premium: string;
+      time: number;
+    }>;
     this.log('fundingHistory response length:', data?.length);
     return data;
   }
@@ -1510,7 +1639,15 @@ export class HyperliquidClient {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-    const data = await response.json();
+    const data = await response.json() as Array<{
+      coin: string;
+      side: 'B' | 'A';
+      px: string;
+      sz: string;
+      time: number;
+      hash: string;
+      tid: number;
+    }>;
     this.log('recentTrades response length:', data?.length);
     return data;
   }
@@ -1537,7 +1674,12 @@ export class HyperliquidClient {
         user: user ?? this.address,
       }),
     });
-    const data = await response.json();
+    const data = await response.json() as {
+      cumVlm: string;
+      nRequestsUsed: number;
+      nRequestsCap: number;
+      nRequestsSurplus: number;
+    };
     this.log('userRateLimit response:', JSON.stringify(data));
     return data;
   }
@@ -2137,7 +2279,9 @@ export class HyperliquidClient {
     // Use the exact spot market key from spotMeta (e.g. "@230", "PURR/USDC").
     // On testnet the tradable asset id and displayed market key can diverge.
     const mids = await this.getAllMids();
-    let midStr = mids[spotCoinKey];
+    // Record<string, string> lookup returns `string` under TS defaults but
+    // is runtime-undefined when the key is absent — hence the explicit union.
+    let midStr: string | undefined = mids[spotCoinKey];
 
     // Fallback: allMids may omit spot pairs (especially on testnet).
     // Try spotMetaAndAssetCtxs which returns markPx directly.
@@ -2295,7 +2439,7 @@ export class HyperliquidClient {
     await this.getMetaAndAssetCtxs();
 
     if (leverage) {
-      await this.setLeverage(coin, leverage);
+      await this.updateLeverage(coin, leverage);
     }
 
     const assetIndex = this.getAssetIndex(coin);

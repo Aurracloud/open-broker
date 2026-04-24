@@ -597,18 +597,33 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
 
         // Emit order_filled with the authoritative fill delta + fee/pnl from
         // the userFills WS stream. Covers both partial and terminal fills.
+        // Fee is converted to USD using feeToken: for non-USDC fees (spot
+        // buys pay in the received asset), fee × price yields USD since the
+        // fee token is the base of the traded pair and `price` is quote/base.
         if (eventBus.has('order_filled')) {
           const size = parseFloat(fill.sz);
           const price = parseFloat(fill.px);
-          const fee = parseFloat(fill.fee);
+          const rawFee = parseFloat(fill.fee);
           const closedPnl = parseFloat(fill.closedPnl);
+          const feeToken = fill.feeToken;
+          let feeUsd: number | undefined;
+          if (Number.isFinite(rawFee)) {
+            if (feeToken === 'USDC' || !feeToken) {
+              feeUsd = rawFee;
+            } else if (Number.isFinite(price) && price > 0) {
+              feeUsd = rawFee * price;
+            } else {
+              feeUsd = undefined;
+            }
+          }
           void emitAutomationEvent('order_filled', {
             coin: fill.coin,
             oid: fill.oid,
             side: fill.side === 'B' ? 'buy' : 'sell',
             size,
             price,
-            fee: Number.isFinite(fee) ? fee : undefined,
+            fee: feeUsd,
+            feeToken,
             closedPnl: Number.isFinite(closedPnl) ? closedPnl : undefined,
             crossed: fill.crossed,
           }, 'ws');

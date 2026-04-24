@@ -51,6 +51,8 @@ export interface WsEventMap {
     time: number;
     closedPnl: string;
     fee: string;
+    /** Token the fee is denominated in. Spot buys typically pay fee in the base asset (e.g. "HYPE") rather than "USDC"; consumers must convert using `px` to get a USD value. */
+    feeToken: string;
     oid: number;
     crossed: boolean;
   };
@@ -245,6 +247,7 @@ export class WebSocketManager {
           time: fill.time,
           closedPnl: fill.closedPnl,
           fee: fill.fee,
+          feeToken: fill.feeToken,
           oid: fill.oid,
           crossed: fill.crossed,
         });

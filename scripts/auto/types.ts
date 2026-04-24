@@ -49,9 +49,14 @@ export interface AutomationEventPayloads {
   /**
    * Fires on every trade fill — partial and terminal — sourced from the
    * Hyperliquid `userFills` WS stream. `size` is the fill delta (NOT remaining
-   * size of the order). `fee` and `closedPnl` are in USD; `crossed` is true
-   * when this side was the taker. Fee/pnl/crossed are optional so that older
-   * consumers that only read coin/oid/side/size/price keep working.
+   * size of the order). `fee` and `closedPnl` are in USD (converted from the
+   * raw fee denomination using `price` when `feeToken !== "USDC"`, which
+   * happens on spot buys where the fee is charged in the received asset).
+   * `feeToken` is the original denomination so consumers can identify legs
+   * that won't carry a builder fee (Hyperliquid only charges builder fees on
+   * USDC-denominated trades). `crossed` is true when this side was the taker.
+   * Fee/pnl/crossed/feeToken are optional so older consumers that only read
+   * coin/oid/side/size/price keep working.
    */
   order_filled: {
     coin: string;
@@ -60,6 +65,7 @@ export interface AutomationEventPayloads {
     size: number;
     price: number;
     fee?: number;
+    feeToken?: string;
     closedPnl?: number;
     crossed?: boolean;
   };

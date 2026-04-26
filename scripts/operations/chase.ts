@@ -1,6 +1,7 @@
 #!/usr/bin/env npx tsx
 // Chase Order - Follow price with limit orders until filled
 
+import { fileURLToPath } from 'url';
 import { getClient } from '../core/client.js';
 import { formatUsd, parseArgs, sleep } from '../core/utils.js';
 
@@ -253,4 +254,8 @@ async function main() {
   }
 }
 
-main();
+// Only run when invoked as a script — not when imported as a module
+// (e.g. by `openbroker-plugin` via the lib re-export of `runChase`).
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  main();
+}

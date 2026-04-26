@@ -1,6 +1,7 @@
 #!/usr/bin/env npx tsx
 // Bracket Order - Entry with Take Profit and Stop Loss
 
+import { fileURLToPath } from 'url';
 import { getClient } from '../core/client.js';
 import { formatUsd, parseArgs, sleep } from '../core/utils.js';
 
@@ -298,4 +299,8 @@ async function main() {
   }
 }
 
-main();
+// Only run when invoked as a script — not when imported as a module
+// (e.g. by `openbroker-plugin` via the lib re-export of `runBracket`).
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  main();
+}

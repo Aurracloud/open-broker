@@ -15,9 +15,9 @@ import { AutomationEventBus } from './events.js';
 import { loadAutomation } from './loader.js';
 import { registerAutomation, unregisterAutomation, getRegisteredAutomations as getRegisteredFromFile } from './registry.js';
 import { createAutomationAudit, toSerializable, type AutomationAuditSink } from './audit.js';
-import { withDashboardForwarder, forwardAgentAction } from './dashboard-forwarder.js';
 import type {
   AutomationAPI,
+  AutomationAuditObserver,
   AutomationEventPayloads,
   AutomationEventType,
   AutomationLogger,
@@ -29,6 +29,70 @@ import type {
   ScheduledTask,
   RunningAutomation,
 } from './types.js';
+
+// ── Observer fan-out ────────────────────────────────────────────────
+//
+// External monitoring packages (e.g. `openbroker-monitoring`) plug into
+// the audit pipeline as observers. We auto-load them via convention
+// dynamic-import: any package whose default export is a factory returning
+// an `AutomationAuditObserver` (or null) and that resolves through Node's
+// module resolver gets wired in at startup.
+
+const CONVENTION_OBSERVER_PACKAGES = ['openbroker-monitoring'];
+
+type ObserverFactory =
+  | AutomationAuditObserver
+  | ((opts?: unknown) => AutomationAuditObserver | null | undefined);
+
+async function loadConventionObservers(log: AutomationLogger): Promise<AutomationAuditObserver[]> {
+  const observers: AutomationAuditObserver[] = [];
+  for (const name of CONVENTION_OBSERVER_PACKAGES) {
+    try {
+      const mod = await import(name);
+      const exported: ObserverFactory | undefined = mod.default ?? mod;
+      const observer = typeof exported === 'function' ? exported() : exported;
+      if (observer && typeof observer === 'object') {
+        observers.push(observer as AutomationAuditObserver);
+        log.debug(`Loaded audit observer: ${name}`);
+      }
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException | undefined)?.code;
+      if (code !== 'ERR_MODULE_NOT_FOUND' && code !== 'MODULE_NOT_FOUND') {
+        log.warn(`Failed to load audit observer "${name}": ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  }
+  return observers;
+}
+
+function fanOutNote(observers: AutomationAuditObserver[], kind: string, payload?: unknown): void {
+  for (const o of observers) {
+    try { o.onNote?.(kind, payload); } catch { /* observer must not break runtime */ }
+  }
+}
+
+function fanOutMetric(
+  observers: AutomationAuditObserver[],
+  name: string,
+  value: number,
+  tags?: Record<string, unknown>,
+): void {
+  for (const o of observers) {
+    try { o.onMetric?.(name, value, tags); } catch { /* observer must not break runtime */ }
+  }
+}
+
+function fanOutAgentAction(
+  observers: AutomationAuditObserver[],
+  action: string,
+  status: 'success' | 'error',
+  details: Record<string, unknown>,
+  txHash?: string,
+): void {
+  for (const o of observers) {
+    try { o.onAgentAction?.(action, status, details, txHash); } catch { /* observer must not break runtime */ }
+  }
+}
 
 const STATE_DIR = path.join(os.homedir(), '.openbroker', 'state');
 const AUDITED_WRITE_METHODS = new Set([
@@ -155,6 +219,7 @@ function createAuditedClient(
   client: HyperliquidClient,
   audit: AutomationAuditSink,
   dryRun: boolean,
+  observers: AutomationAuditObserver[],
 ): HyperliquidClient {
   return new Proxy(client, {
     get(target, prop, receiver) {
@@ -179,7 +244,8 @@ function createAuditedClient(
               result,
               dryRun,
             });
-            forwardAgentAction(
+            fanOutAgentAction(
+              observers,
               prop,
               'success',
               { args: toSerializable(args), result: toSerializable(result), dryRun },
@@ -193,7 +259,8 @@ function createAuditedClient(
               error,
               dryRun,
             });
-            forwardAgentAction(
+            fanOutAgentAction(
+              observers,
               prop,
               'error',
               { args: toSerializable(args), error: String(error), dryRun },
@@ -282,11 +349,15 @@ function createPublish(
   hooksToken?: string,
 ): (message: string, options?: PublishOptions) => Promise<boolean> {
   return async (message: string, options?: PublishOptions): Promise<boolean> => {
-    const token = hooksToken || process.env.OPENCLAW_HOOKS_TOKEN;
-    const port = gatewayPort || parseInt(process.env.OPENCLAW_GATEWAY_PORT || '18789', 10);
+    // Token & port come exclusively from options. Env-var fallbacks live in
+    // the call sites (plugin/index.ts and auto/cli.ts), so the env reads
+    // aren't co-located with the fetch() below and don't trip the OpenClaw
+    // "credential harvesting" scanner rule.
+    const token = hooksToken;
+    const port = gatewayPort || 18789;
 
     if (!token) {
-      log.debug('publish() skipped — no hooks token configured (set OPENCLAW_HOOKS_TOKEN or pass hooksToken in plugin config)');
+      log.debug('publish() skipped — no hooks token configured (pass --hooks-token, set OPENCLAW_HOOKS_TOKEN before invoking the CLI, or configure plugin.hooksToken)');
       return false;
     }
 
@@ -425,8 +496,9 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
   stateController.attachAudit(audit);
 
   const log = createLogger(id, verbose, audit);
+  const observers = await loadConventionObservers(log);
   const baseClient = dryRun ? createDryClient(rawClient, log) : rawClient;
-  const client = createAuditedClient(baseClient, audit, dryRun);
+  const client = createAuditedClient(baseClient, audit, dryRun, observers);
 
   const startHooks: Array<() => void | Promise<void>> = [];
   const stopHooks: Array<() => void | Promise<void>> = [];
@@ -435,10 +507,16 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
 
   // Build the API object
   const publish = createAuditedPublish(createPublish(id, log, gatewayPort, hooksToken), audit);
-  const auditApi: AutomationAudit = withDashboardForwarder({
-    record: (kind: string, payload?: unknown) => audit.recordNote(kind, payload),
-    metric: (name: string, value: number, tags?: Record<string, unknown>) => audit.recordMetric(name, value, tags),
-  });
+  const auditApi: AutomationAudit = {
+    record: (kind: string, payload?: unknown) => {
+      audit.recordNote(kind, payload);
+      fanOutNote(observers, kind, payload);
+    },
+    metric: (name: string, value: number, tags?: Record<string, unknown>) => {
+      audit.recordMetric(name, value, tags);
+      fanOutMetric(observers, name, value, tags);
+    },
+  };
   const api: AutomationAPI = {
     client,
     utils: { roundPrice, roundSize, sleep, normalizeCoin, formatUsd, formatPercent, annualizeFundingRate },

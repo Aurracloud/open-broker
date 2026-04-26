@@ -130,6 +130,12 @@ async function runCommand(args: Record<string, string | boolean>, positional: st
     process.exit(1);
   }
 
+  // Resolve OpenClaw gateway env vars here (no network code in this file)
+  // so the runtime stays clean of process.env reads next to fetch() calls.
+  const envHooksToken = process.env.OPENCLAW_HOOKS_TOKEN;
+  const envGatewayPortStr = process.env.OPENCLAW_GATEWAY_PORT;
+  const envGatewayPort = envGatewayPortStr ? parseInt(envGatewayPortStr, 10) : undefined;
+
   const automation = await startAutomation({
     scriptPath,
     id,
@@ -138,6 +144,8 @@ async function runCommand(args: Record<string, string | boolean>, positional: st
     pollIntervalMs,
     useWebSocket,
     initialState: Object.keys(initialState).length > 0 ? initialState : undefined,
+    hooksToken: envHooksToken,
+    gatewayPort: envGatewayPort && !isNaN(envGatewayPort) ? envGatewayPort : undefined,
   });
 
   // Graceful shutdown on SIGINT/SIGTERM

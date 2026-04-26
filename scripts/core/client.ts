@@ -56,7 +56,7 @@ export class HyperliquidClient {
   constructor(config?: OpenBrokerConfig) {
     this.config = config ?? loadConfig();
     this.account = privateKeyToAccount(this.config.privateKey);
-    this.verbose = process.env.VERBOSE === '1' || process.env.VERBOSE === 'true';
+    this.verbose = this.config.verbose;
 
     // Initialize SDK clients
     this.transport = new HttpTransport({ isTestnet: !isMainnet() });

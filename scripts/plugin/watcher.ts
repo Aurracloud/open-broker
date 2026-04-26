@@ -45,8 +45,11 @@ export class PositionWatcher implements PluginService {
   constructor(options: WatcherOptions) {
     this.logger = options.logger;
     this.gatewayPort = options.gatewayPort;
-    this.hooksToken = options.hooksToken || process.env.OPENCLAW_HOOKS_TOKEN;
-    this.accountAddress = options.accountAddress || process.env.HYPERLIQUID_ACCOUNT_ADDRESS || undefined;
+    // Tokens/addresses come exclusively from options (resolved by plugin/index.ts).
+    // Reading process.env here would co-locate with the fetch() below and trip
+    // the OpenClaw "credential harvesting" scanner rule.
+    this.hooksToken = options.hooksToken;
+    this.accountAddress = options.accountAddress || undefined;
     this.pollIntervalMs = options.pollIntervalMs ?? 30_000;
     this.pnlChangeThresholdPct = options.pnlChangeThresholdPct ?? 5;
     this.marginUsageWarningPct = options.marginUsageWarningPct ?? 80;

@@ -116,6 +116,26 @@ export interface AutomationAudit {
   metric(name: string, value: number, tags?: Record<string, unknown>): void;
 }
 
+/**
+ * Hook for external monitoring packages (e.g. `openbroker-monitoring`) to
+ * receive audit events. The runtime fans out every note, metric, and
+ * audited write-method call to every observer it has loaded.
+ *
+ * Observers are auto-loaded via convention dynamic-import — the runtime
+ * tries `await import('openbroker-monitoring')` at startup and uses the
+ * default export (a factory returning an observer or null).
+ */
+export interface AutomationAuditObserver {
+  onNote?(kind: string, payload?: unknown): void;
+  onMetric?(name: string, value: number, tags?: Record<string, unknown>): void;
+  onAgentAction?(
+    action: string,
+    status: 'success' | 'error',
+    details: Record<string, unknown>,
+    txHash?: string,
+  ): void;
+}
+
 // ── Publish (webhook) ───────────────────────────────────────────────
 
 export interface PublishOptions {

@@ -7,9 +7,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as readline from 'readline';
 import { homedir } from 'os';
+import { OPENBROKER_URL, ENV_TESTNET, ENV_CONFIG_PATH } from './env.js';
 
 const OPEN_BROKER_BUILDER_ADDRESS = '0xbb67021fA3e62ab4DA985bb5a55c5c1884381068';
-const OPENBROKER_URL = process.env.OPENBROKER_URL || 'https://openbroker.dev';
 
 // Global config directory: ~/.openbroker/
 const GLOBAL_CONFIG_DIR = path.join(homedir(), '.openbroker');
@@ -17,11 +17,11 @@ const GLOBAL_CONFIG_PATH = path.join(GLOBAL_CONFIG_DIR, '.env');
 
 // Parse CLI flags
 const cliArgs = process.argv.slice(2);
-const useTestnet = cliArgs.includes('--testnet') || process.env.HYPERLIQUID_NETWORK === 'testnet';
+const useTestnet = cliArgs.includes('--testnet') || ENV_TESTNET;
 const accountAddressIdx = cliArgs.indexOf('--account-address');
 const cliAccountAddress = accountAddressIdx !== -1 ? cliArgs[accountAddressIdx + 1] : undefined;
 const configPathIdx = cliArgs.indexOf('-c') !== -1 ? cliArgs.indexOf('-c') : cliArgs.indexOf('--config');
-const cliConfigPath = configPathIdx !== -1 ? cliArgs[configPathIdx + 1] : process.env.OPENBROKER_CONFIG;
+const cliConfigPath = configPathIdx !== -1 ? cliArgs[configPathIdx + 1] : ENV_CONFIG_PATH;
 
 const CONFIG_PATH = cliConfigPath ? path.resolve(cliConfigPath) : GLOBAL_CONFIG_PATH;
 const CONFIG_DIR = path.dirname(CONFIG_PATH);

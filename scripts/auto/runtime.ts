@@ -349,10 +349,6 @@ function createPublish(
   hooksToken?: string,
 ): (message: string, options?: PublishOptions) => Promise<boolean> {
   return async (message: string, options?: PublishOptions): Promise<boolean> => {
-    // Token & port come exclusively from options. Env-var fallbacks live in
-    // the call sites (plugin/index.ts and auto/cli.ts), so the env reads
-    // aren't co-located with the fetch() below and don't trip the OpenClaw
-    // "credential harvesting" scanner rule.
     const token = hooksToken;
     const port = gatewayPort || 18789;
 

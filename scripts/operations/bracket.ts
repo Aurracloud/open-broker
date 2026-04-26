@@ -43,17 +43,215 @@ Examples:
 `);
 }
 
-interface BracketPlan {
+export interface BracketOptions {
   coin: string;
-  side: 'long' | 'short';
+  side: 'buy' | 'sell';
   size: number;
-  entryType: 'market' | 'limit';
-  entryPrice: number;
-  tpPrice: number;
-  slPrice: number;
   tpPct: number;
   slPct: number;
-  riskReward: number;
+  entryType?: 'market' | 'limit';
+  entryPrice?: number;
+  slippage?: number;
+  leverage?: number;
+  dryRun?: boolean;
+  verbose?: boolean;
+  /** Receives each output line. Defaults to console.log. */
+  output?: (line: string) => void;
+}
+
+export interface BracketResult {
+  status: 'dry' | 'limit_resting' | 'complete' | 'entry_failed' | 'partial';
+  entryPrice?: number;
+  tpPrice?: number;
+  slPrice?: number;
+  tpOid?: number | null;
+  slOid?: number | null;
+  entryOid?: number | null;
+  reason?: string;
+}
+
+export async function runBracket(opts: BracketOptions): Promise<BracketResult> {
+  const out = opts.output ?? ((line: string) => console.log(line));
+  const entryType = opts.entryType ?? 'market';
+  const isLong = opts.side === 'buy';
+
+  if (opts.size <= 0 || isNaN(opts.size)) throw new Error('size must be positive');
+  if (opts.tpPct <= 0 || opts.slPct <= 0) throw new Error('tp and sl must be positive percentages');
+  if (entryType === 'limit' && opts.entryPrice === undefined) {
+    throw new Error('entryPrice is required for limit entry');
+  }
+
+  const client = getClient();
+  if (opts.verbose) client.verbose = true;
+
+  out('Open Broker - Bracket Order');
+  out('===========================\n');
+
+  const mids = await client.getAllMids();
+  const midPrice = parseFloat(mids[opts.coin]);
+  if (!midPrice) throw new Error(`No market data for ${opts.coin}`);
+
+  const entry = entryType === 'limit' ? opts.entryPrice! : midPrice;
+
+  let tpPrice = isLong
+    ? entry * (1 + opts.tpPct / 100)
+    : entry * (1 - opts.tpPct / 100);
+  let slPrice = isLong
+    ? entry * (1 - opts.slPct / 100)
+    : entry * (1 + opts.slPct / 100);
+
+  const riskReward = opts.tpPct / opts.slPct;
+  const notional = entry * opts.size;
+
+  out('Bracket Plan');
+  out('------------');
+  out(`Coin:           ${opts.coin}`);
+  out(`Position:       ${isLong ? 'LONG' : 'SHORT'}`);
+  out(`Size:           ${opts.size}`);
+  out(`Entry Type:     ${entryType.toUpperCase()}`);
+  out(`Current Mid:    ${formatUsd(midPrice)}`);
+  out(`Entry Price:    ${formatUsd(entry)}${entryType === 'market' ? ' (approx)' : ''}`);
+  out(`Take Profit:    ${formatUsd(tpPrice)} (+${opts.tpPct}%)`);
+  out(`Stop Loss:      ${formatUsd(slPrice)} (-${opts.slPct}%)`);
+  out(`Risk/Reward:    1:${riskReward.toFixed(2)}`);
+  out(`Est. Notional:  ${formatUsd(notional)}`);
+
+  const potentialProfit = notional * (opts.tpPct / 100);
+  const potentialLoss = notional * (opts.slPct / 100);
+  out('\nRisk Analysis');
+  out('-------------');
+  out(`Potential Profit: ${formatUsd(potentialProfit)}`);
+  out(`Potential Loss:   ${formatUsd(potentialLoss)}`);
+
+  if (opts.dryRun) {
+    out('\n🔍 Dry run - bracket not executed');
+    return { status: 'dry', entryPrice: entry, tpPrice, slPrice };
+  }
+
+  out('\nExecuting bracket...\n');
+
+  // Step 1: Entry
+  out('Step 1: Entry order');
+  let actualEntry = entry;
+  let entryOid: number | null = null;
+
+  if (entryType === 'market') {
+    const entryResponse = await client.marketOrder(opts.coin, isLong, opts.size, opts.slippage, opts.leverage);
+
+    if (entryResponse.status === 'ok' && entryResponse.response && typeof entryResponse.response === 'object') {
+      const status = entryResponse.response.data.statuses[0];
+      if (status?.filled) {
+        actualEntry = parseFloat(status.filled.avgPx);
+        out(`  ✅ Filled @ ${formatUsd(actualEntry)}`);
+      } else if (status?.error) {
+        out(`  ❌ Entry failed: ${status.error}`);
+        out('\n⚠️ Bracket aborted - no position opened');
+        return { status: 'entry_failed', reason: status.error };
+      }
+    } else {
+      const reason = typeof entryResponse.response === 'string' ? entryResponse.response : 'Unknown error';
+      out(`  ❌ Entry failed: ${reason}`);
+      out('\n⚠️ Bracket aborted - no position opened');
+      return { status: 'entry_failed', reason };
+    }
+  } else {
+    const entryResponse = await client.limitOrder(opts.coin, isLong, opts.size, entry, 'Gtc', false, opts.leverage);
+
+    if (entryResponse.status === 'ok' && entryResponse.response && typeof entryResponse.response === 'object') {
+      const status = entryResponse.response.data.statuses[0];
+      if (status?.resting) {
+        entryOid = status.resting.oid;
+        out(`  ✅ Limit order placed @ ${formatUsd(entry)} (OID: ${entryOid})`);
+        out(`  ⏳ Waiting for fill before placing TP/SL...`);
+        out('\n⚠️ Note: TP/SL will be placed after entry fills. Monitor manually or use a strategy script.');
+        return { status: 'limit_resting', entryOid, entryPrice: entry };
+      } else if (status?.filled) {
+        actualEntry = parseFloat(status.filled.avgPx);
+        out(`  ✅ Filled immediately @ ${formatUsd(actualEntry)}`);
+      } else if (status?.error) {
+        out(`  ❌ Entry failed: ${status.error}`);
+        return { status: 'entry_failed', reason: status.error };
+      }
+    } else {
+      out(`  ❌ Entry failed`);
+      return { status: 'entry_failed', reason: 'Unknown error' };
+    }
+  }
+
+  // Recalculate TP/SL based on actual entry
+  if (isLong) {
+    tpPrice = actualEntry * (1 + opts.tpPct / 100);
+    slPrice = actualEntry * (1 - opts.slPct / 100);
+  } else {
+    tpPrice = actualEntry * (1 - opts.tpPct / 100);
+    slPrice = actualEntry * (1 + opts.slPct / 100);
+  }
+
+  await sleep(500);
+
+  // Step 2: Take Profit (trigger order)
+  out('\nStep 2: Take Profit order (trigger)');
+  const tpSide = !isLong;
+  const tpResponse = await client.takeProfit(opts.coin, tpSide, opts.size, tpPrice);
+
+  let tpOid: number | null = null;
+  if (tpResponse.status === 'ok' && tpResponse.response && typeof tpResponse.response === 'object') {
+    const status = tpResponse.response.data.statuses[0];
+    if (status?.resting) {
+      tpOid = status.resting.oid;
+      out(`  ✅ TP trigger placed @ ${formatUsd(tpPrice)} (OID: ${tpOid})`);
+    } else if (status?.error) {
+      out(`  ❌ TP failed: ${status.error}`);
+    } else {
+      out(`  ⚠️ TP status: ${JSON.stringify(status)}`);
+    }
+  } else {
+    const reason = typeof tpResponse.response === 'string' ? tpResponse.response : 'Unknown error';
+    out(`  ❌ TP failed: ${reason}`);
+  }
+
+  await sleep(500);
+
+  // Step 3: Stop Loss (trigger order)
+  out('\nStep 3: Stop Loss order (trigger)');
+  const slSide = !isLong;
+  const slResponse = await client.stopLoss(opts.coin, slSide, opts.size, slPrice);
+
+  let slOid: number | null = null;
+  if (slResponse.status === 'ok' && slResponse.response && typeof slResponse.response === 'object') {
+    const status = slResponse.response.data.statuses[0];
+    if (status?.resting) {
+      slOid = status.resting.oid;
+      out(`  ✅ SL trigger placed @ ${formatUsd(slPrice)} (OID: ${slOid})`);
+    } else if (status?.error) {
+      out(`  ❌ SL failed: ${status.error}`);
+    } else {
+      out(`  ⚠️ SL status: ${JSON.stringify(status)}`);
+    }
+  } else {
+    const reason = typeof slResponse.response === 'string' ? slResponse.response : 'Unknown error';
+    out(`  ❌ SL failed: ${reason}`);
+  }
+
+  out('\n========== Bracket Summary ==========');
+  out(`Position:    ${isLong ? 'LONG' : 'SHORT'} ${opts.size} ${opts.coin}`);
+  out(`Entry:       ${formatUsd(actualEntry)}`);
+  out(`Take Profit: ${formatUsd(tpPrice)} (+${opts.tpPct}%) - Trigger order`);
+  out(`Stop Loss:   ${formatUsd(slPrice)} (-${opts.slPct}%) - Trigger order`);
+  if (tpOid && slOid) {
+    out(`\n✅ Bracket complete! TP and SL are trigger orders.`);
+    out(`   They will only execute when price reaches trigger level.`);
+    out(`   When one fills, cancel the other manually.`);
+  }
+
+  return {
+    status: tpOid && slOid ? 'complete' : 'partial',
+    entryPrice: actualEntry,
+    tpPrice,
+    slPrice,
+    tpOid,
+    slOid,
+  };
 }
 
 async function main() {
@@ -74,212 +272,28 @@ async function main() {
     printUsage();
     process.exit(1);
   }
-
   if (side !== 'buy' && side !== 'sell') {
     console.error('Error: --side must be "buy" or "sell"');
     process.exit(1);
   }
 
-  if (entryType === 'limit' && !entryPrice) {
-    console.error('Error: --price is required for limit entry');
-    process.exit(1);
-  }
-
-  if (tpPct <= 0 || slPct <= 0) {
-    console.error('Error: --tp and --sl must be positive percentages');
-    process.exit(1);
-  }
-
-  const isLong = side === 'buy';
-  const client = getClient();
-
-  if (args.verbose) {
-    client.verbose = true;
-  }
-
-  console.log('Open Broker - Bracket Order');
-  console.log('===========================\n');
-
   try {
-    const mids = await client.getAllMids();
-    const midPrice = parseFloat(mids[coin]);
-    if (!midPrice) {
-      console.error(`Error: No market data for ${coin}`);
-      process.exit(1);
-    }
-
-    // Calculate prices
-    const entry = entryType === 'limit' ? entryPrice! : midPrice;
-
-    let tpPrice: number;
-    let slPrice: number;
-
-    if (isLong) {
-      // Long: TP above, SL below
-      tpPrice = entry * (1 + tpPct / 100);
-      slPrice = entry * (1 - slPct / 100);
-    } else {
-      // Short: TP below, SL above
-      tpPrice = entry * (1 - tpPct / 100);
-      slPrice = entry * (1 + slPct / 100);
-    }
-
-    const riskReward = tpPct / slPct;
-    const notional = entry * size;
-
-    const plan: BracketPlan = {
+    const result = await runBracket({
       coin,
-      side: isLong ? 'long' : 'short',
+      side: side as 'buy' | 'sell',
       size,
-      entryType,
-      entryPrice: entry,
-      tpPrice,
-      slPrice,
       tpPct,
       slPct,
-      riskReward,
-    };
-
-    console.log('Bracket Plan');
-    console.log('------------');
-    console.log(`Coin:           ${coin}`);
-    console.log(`Position:       ${isLong ? 'LONG' : 'SHORT'}`);
-    console.log(`Size:           ${size}`);
-    console.log(`Entry Type:     ${entryType.toUpperCase()}`);
-    console.log(`Current Mid:    ${formatUsd(midPrice)}`);
-    console.log(`Entry Price:    ${formatUsd(entry)}${entryType === 'market' ? ' (approx)' : ''}`);
-    console.log(`Take Profit:    ${formatUsd(tpPrice)} (+${tpPct}%)`);
-    console.log(`Stop Loss:      ${formatUsd(slPrice)} (-${slPct}%)`);
-    console.log(`Risk/Reward:    1:${riskReward.toFixed(2)}`);
-    console.log(`Est. Notional:  ${formatUsd(notional)}`);
-
-    // Risk analysis
-    const potentialProfit = notional * (tpPct / 100);
-    const potentialLoss = notional * (slPct / 100);
-    console.log(`\nRisk Analysis`);
-    console.log('-------------');
-    console.log(`Potential Profit: ${formatUsd(potentialProfit)}`);
-    console.log(`Potential Loss:   ${formatUsd(potentialLoss)}`);
-
-    if (dryRun) {
-      console.log('\n🔍 Dry run - bracket not executed');
-      return;
-    }
-
-    console.log('\nExecuting bracket...\n');
-
-    // Step 1: Entry
-    console.log('Step 1: Entry order');
-    let actualEntry = entry;
-
-    if (entryType === 'market') {
-      const entryResponse = await client.marketOrder(coin, isLong, size, slippage, leverage);
-
-      if (entryResponse.status === 'ok' && entryResponse.response && typeof entryResponse.response === 'object') {
-        const status = entryResponse.response.data.statuses[0];
-        if (status?.filled) {
-          actualEntry = parseFloat(status.filled.avgPx);
-          console.log(`  ✅ Filled @ ${formatUsd(actualEntry)}`);
-        } else if (status?.error) {
-          console.log(`  ❌ Entry failed: ${status.error}`);
-          console.log('\n⚠️ Bracket aborted - no position opened');
-          process.exit(1);
-        }
-      } else {
-        console.log(`  ❌ Entry failed: ${typeof entryResponse.response === 'string' ? entryResponse.response : 'Unknown error'}`);
-        console.log('\n⚠️ Bracket aborted - no position opened');
-        process.exit(1);
-      }
-    } else {
-      const entryResponse = await client.limitOrder(coin, isLong, size, entry, 'Gtc', false, leverage);
-
-      if (entryResponse.status === 'ok' && entryResponse.response && typeof entryResponse.response === 'object') {
-        const status = entryResponse.response.data.statuses[0];
-        if (status?.resting) {
-          console.log(`  ✅ Limit order placed @ ${formatUsd(entry)} (OID: ${status.resting.oid})`);
-          console.log(`  ⏳ Waiting for fill before placing TP/SL...`);
-          console.log('\n⚠️ Note: TP/SL will be placed after entry fills. Monitor manually or use a strategy script.');
-          return;
-        } else if (status?.filled) {
-          actualEntry = parseFloat(status.filled.avgPx);
-          console.log(`  ✅ Filled immediately @ ${formatUsd(actualEntry)}`);
-        } else if (status?.error) {
-          console.log(`  ❌ Entry failed: ${status.error}`);
-          process.exit(1);
-        }
-      } else {
-        console.log(`  ❌ Entry failed`);
-        process.exit(1);
-      }
-    }
-
-    // Recalculate TP/SL based on actual entry
-    if (isLong) {
-      tpPrice = actualEntry * (1 + tpPct / 100);
-      slPrice = actualEntry * (1 - slPct / 100);
-    } else {
-      tpPrice = actualEntry * (1 - tpPct / 100);
-      slPrice = actualEntry * (1 + slPct / 100);
-    }
-
-    await sleep(500); // Brief delay
-
-    // Step 2: Take Profit (trigger order)
-    console.log('\nStep 2: Take Profit order (trigger)');
-    const tpSide = !isLong; // Opposite of entry: long -> sell TP, short -> buy TP
-    const tpResponse = await client.takeProfit(coin, tpSide, size, tpPrice);
-
-    let tpOid: number | null = null;
-    if (tpResponse.status === 'ok' && tpResponse.response && typeof tpResponse.response === 'object') {
-      const status = tpResponse.response.data.statuses[0];
-      if (status?.resting) {
-        tpOid = status.resting.oid;
-        console.log(`  ✅ TP trigger placed @ ${formatUsd(tpPrice)} (OID: ${tpOid})`);
-      } else if (status?.error) {
-        console.log(`  ❌ TP failed: ${status.error}`);
-      } else {
-        console.log(`  ⚠️ TP status:`, JSON.stringify(status));
-      }
-    } else {
-      console.log(`  ❌ TP failed: ${typeof tpResponse.response === 'string' ? tpResponse.response : 'Unknown error'}`);
-    }
-
-    await sleep(500);
-
-    // Step 3: Stop Loss (trigger order)
-    console.log('\nStep 3: Stop Loss order (trigger)');
-    const slSide = !isLong; // Opposite of entry: long -> sell SL, short -> buy SL
-    const slResponse = await client.stopLoss(coin, slSide, size, slPrice);
-
-    let slOid: number | null = null;
-    if (slResponse.status === 'ok' && slResponse.response && typeof slResponse.response === 'object') {
-      const status = slResponse.response.data.statuses[0];
-      if (status?.resting) {
-        slOid = status.resting.oid;
-        console.log(`  ✅ SL trigger placed @ ${formatUsd(slPrice)} (OID: ${slOid})`);
-      } else if (status?.error) {
-        console.log(`  ❌ SL failed: ${status.error}`);
-      } else {
-        console.log(`  ⚠️ SL status:`, JSON.stringify(status));
-      }
-    } else {
-      console.log(`  ❌ SL failed: ${typeof slResponse.response === 'string' ? slResponse.response : 'Unknown error'}`);
-    }
-
-    // Summary
-    console.log('\n========== Bracket Summary ==========');
-    console.log(`Position:    ${isLong ? 'LONG' : 'SHORT'} ${size} ${coin}`);
-    console.log(`Entry:       ${formatUsd(actualEntry)}`);
-    console.log(`Take Profit: ${formatUsd(tpPrice)} (+${tpPct}%) - Trigger order`);
-    console.log(`Stop Loss:   ${formatUsd(slPrice)} (-${slPct}%) - Trigger order`);
-    if (tpOid && slOid) {
-      console.log(`\n✅ Bracket complete! TP and SL are trigger orders.`);
-      console.log(`   They will only execute when price reaches trigger level.`);
-      console.log(`   When one fills, cancel the other manually.`);
-    }
-
+      entryType,
+      entryPrice,
+      slippage,
+      leverage,
+      dryRun,
+      verbose: args.verbose as boolean,
+    });
+    if (result.status === 'entry_failed') process.exit(1);
   } catch (error) {
-    console.error('Error:', error);
+    console.error('Error:', error instanceof Error ? error.message : error);
     process.exit(1);
   }
 }

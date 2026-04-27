@@ -53,12 +53,21 @@ async function loadConventionObservers(log: AutomationLogger): Promise<Automatio
       const observer = typeof exported === 'function' ? exported() : exported;
       if (observer && typeof observer === 'object') {
         observers.push(observer as AutomationAuditObserver);
-        log.debug(`Loaded audit observer: ${name}`);
+        log.info(`[audit-observer] loaded: ${name}`);
+      } else {
+        // Package resolved but its factory returned null/undefined — typically
+        // because required env (e.g. OB_DASHBOARD_URL) is missing. Surface this
+        // so operators don't silently lose telemetry.
+        log.warn(
+          `[audit-observer] ${name} resolved but factory returned no observer — check the package's required env vars`
+        );
       }
     } catch (err) {
       const code = (err as NodeJS.ErrnoException | undefined)?.code;
-      if (code !== 'ERR_MODULE_NOT_FOUND' && code !== 'MODULE_NOT_FOUND') {
-        log.warn(`Failed to load audit observer "${name}": ${err instanceof Error ? err.message : String(err)}`);
+      if (code === 'ERR_MODULE_NOT_FOUND' || code === 'MODULE_NOT_FOUND') {
+        log.info(`[audit-observer] ${name} not installed — skipping (install it alongside openbroker to forward telemetry)`);
+      } else {
+        log.warn(`[audit-observer] failed to load "${name}": ${err instanceof Error ? err.message : String(err)}`);
       }
     }
   }

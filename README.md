@@ -106,36 +106,38 @@ openbroker markets --sort change --top 10  # Top movers
 
 #### `all-markets` — All Markets
 
-Browse all available markets across main perps, HIP-3 perps, and spot — grouped by type.
+Browse all available markets across main perps, HIP-3 perps, spot, and HIP-4 outcomes — grouped by type.
 
 ```bash
 openbroker all-markets                # Everything
 openbroker all-markets --type perp    # Main perps only
 openbroker all-markets --type hip3    # HIP-3 perps only
 openbroker all-markets --type spot    # Spot only
+openbroker all-markets --type outcome # HIP-4 outcomes only
 openbroker all-markets --top 20       # Top 20 by volume
 ```
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--type` | Filter: `perp`, `spot`, `hip3`, or `all` | `all` |
+| `--type` | Filter: `perp`, `spot`, `hip3`, `outcome`, or `all` | `all` |
 | `--top` | Limit to top N by volume | — |
 | `--verbose` | Show detailed output | — |
 
 #### `search` — Search Markets
 
-Search for assets by name across all providers (perps, HIP-3, spot). Shows funding comparison when an asset is listed on multiple venues.
+Search for assets by name across all providers (perps, HIP-3, spot, HIP-4 outcomes). Shows funding comparison when an asset is listed on multiple venues.
 
 ```bash
 openbroker search --query GOLD             # Find all GOLD markets
 openbroker search --query ETH --type perp  # ETH perps only
 openbroker search --query PURR --type spot # PURR spot only
+openbroker search --query BTC --type outcome # HIP-4 outcomes only
 ```
 
 | Flag | Description | Default |
 |------|-------------|---------|
 | `--query` | Search term (matches coin name) | **required** |
-| `--type` | Filter: `perp`, `spot`, `hip3`, or `all` | `all` |
+| `--type` | Filter: `perp`, `spot`, `hip3`, `outcome`, or `all` | `all` |
 | `--verbose` | Show detailed output | — |
 
 #### `spot` — Spot Markets & Balances
@@ -153,6 +155,26 @@ openbroker spot --top 20         # Top 20 by volume
 | `--coin` | Filter by coin symbol | — |
 | `--top` | Limit to top N by volume | — |
 | `--verbose` | Show token metadata | — |
+
+#### `outcomes` — HIP-4 Outcome Markets
+
+Search and inspect prediction/outcome markets. Outcome sides use Hyperliquid's encoded spot-like coin form: `#<encoding>`, where `encoding = 10 * outcomeId + side`; side `0` is usually YES and side `1` is usually NO.
+
+```bash
+openbroker outcomes --query BTC
+openbroker outcomes --outcome 123
+openbroker outcomes --outcome 123 --side yes --json
+openbroker outcomes --balances
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--query` | Search market name, description, underlying, expiry, or target price | — |
+| `--outcome` | Outcome id, `#<encoding>`, or `+<encoding>` | — |
+| `--side` | Outcome side for plain ids: `yes`, `no`, `0`, or `1` | `yes` |
+| `--balances` | Show outcome token balances | — |
+| `--top` | Limit to top N matches | — |
+| `--json` | Machine-readable output | — |
 
 #### `fills` — Trade Fill History
 
@@ -378,6 +400,30 @@ openbroker cancel --all --dry              # Preview what would be cancelled
 | `--oid` | Cancel a specific order by ID | — |
 | `--all` | Cancel all open orders | — |
 | `--dry` | Show orders without cancelling | — |
+
+#### `outcome-buy` / `outcome-sell` / `outcome-order` — HIP-4 Outcome Orders
+
+Buy or sell a YES/NO outcome token. Buying opens exposure to that side; selling reduces or closes that token balance. Market orders are IOC limits with slippage protection.
+
+```bash
+openbroker outcomes --query BTC
+openbroker outcome-buy --outcome 123 --outcome-side yes --size 10 --dry
+openbroker outcome-buy --outcome 123 --outcome-side no --size 5 --price 0.42
+openbroker outcome-sell --outcome #1230 --size 10
+openbroker outcome-order --outcome 123 --outcome-side yes --side buy --size 10
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--outcome` | Outcome id, `#<encoding>`, or `+<encoding>` | **required** |
+| `--outcome-side` | `yes`, `no`, `0`, or `1` when using a plain outcome id | `yes` |
+| `--side` | `buy` or `sell` (auto-set by shortcuts) | **required** |
+| `--size` | Size in outcome token units | **required** |
+| `--price` | Limit price between 0 and 1 (omit for market IOC) | market |
+| `--tif` | Time in force for limit orders: `Gtc`, `Ioc`, `Alo` | `Gtc` |
+| `--slippage` | Slippage tolerance in bps for market orders | `50` |
+| `--sz-decimals` | Override size decimals if metadata omits token decimals | metadata / `0` |
+| `--dry` | Preview without executing | — |
 
 ---
 
@@ -742,8 +788,9 @@ When loaded, the plugin registers these agent tools:
 | Info | `ob_candles` | OHLCV candle data for an asset |
 | Info | `ob_trades` | Recent trades (tape) for an asset |
 | Info | `ob_markets` | Market data (price, volume, OI) |
-| Info | `ob_search` | Search assets across perps, HIP-3, and spot |
+| Info | `ob_search` | Search assets across perps, HIP-3, spot, and HIP-4 outcomes |
 | Info | `ob_spot` | Spot markets and token balances |
+| Info | `ob_outcomes` | HIP-4 outcome markets and outcome token balances |
 | Info | `ob_rate_limit` | API rate limit usage and capacity |
 | Trading | `ob_buy` | Market buy |
 | Trading | `ob_sell` | Market sell |
@@ -751,6 +798,8 @@ When loaded, the plugin registers these agent tools:
 | Trading | `ob_trigger` | Trigger order (TP/SL) |
 | Trading | `ob_tpsl` | Set TP/SL on existing position |
 | Trading | `ob_cancel` | Cancel orders |
+| Trading | `ob_outcome_buy` | Buy a HIP-4 YES/NO outcome token |
+| Trading | `ob_outcome_sell` | Sell or close a HIP-4 YES/NO outcome token |
 | Advanced | `ob_twap` | Native TWAP order (exchange-managed) |
 | Advanced | `ob_twap_cancel` | Cancel a running TWAP order |
 | Advanced | `ob_twap_status` | View TWAP order history/status |

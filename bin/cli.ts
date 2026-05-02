@@ -20,7 +20,7 @@ const commands: Record<string, { script: string; description: string }> = {
   'positions': { script: 'info/positions.ts', description: 'View open positions' },
   'funding': { script: 'info/funding.ts', description: 'View funding rates' },
   'markets': { script: 'info/markets.ts', description: 'View market data' },
-  'all-markets': { script: 'info/all-markets.ts', description: 'View all markets (perps, HIP-3, spot)' },
+  'all-markets': { script: 'info/all-markets.ts', description: 'View all markets (perps, HIP-3, spot, HIP-4)' },
   'search': { script: 'info/search-markets.ts', description: 'Search for assets across providers' },
   'spot': { script: 'info/spot.ts', description: 'View spot markets and balances' },
   'fills': { script: 'info/fills.ts', description: 'View trade fill history' },
@@ -32,6 +32,7 @@ const commands: Record<string, { script: string; description: string }> = {
   'trades': { script: 'info/trades.ts', description: 'View recent trades for an asset' },
   'rate-limit': { script: 'info/rate-limit.ts', description: 'View API rate limit status' },
   'funding-scan': { script: 'info/funding-scan.ts', description: 'Scan funding rates across all dexes' },
+  'outcomes': { script: 'info/outcomes.ts', description: 'Search and inspect HIP-4 outcome markets' },
 
   // Operations
   'buy': { script: 'operations/market-order.ts', description: 'Market buy order' },
@@ -50,6 +51,11 @@ const commands: Record<string, { script: string; description: string }> = {
   'spot-buy': { script: 'operations/spot-order.ts', description: 'Spot buy order' },
   'spot-sell': { script: 'operations/spot-order.ts', description: 'Spot sell order' },
   'spot-order': { script: 'operations/spot-order.ts', description: 'Spot order (market or limit)' },
+  'outcome-buy': { script: 'operations/outcome-order.ts', description: 'Buy a HIP-4 outcome token' },
+  'outcome-sell': { script: 'operations/outcome-order.ts', description: 'Sell a HIP-4 outcome token' },
+  'outcome-open': { script: 'operations/outcome-order.ts', description: 'Open a HIP-4 outcome position' },
+  'outcome-close': { script: 'operations/outcome-order.ts', description: 'Close a HIP-4 outcome position' },
+  'outcome-order': { script: 'operations/outcome-order.ts', description: 'HIP-4 outcome order (market or limit)' },
 
   // Automations
   'auto': { script: 'auto/cli.ts', description: 'Run/manage trading automations' },
@@ -76,11 +82,12 @@ Info Commands:
   candles              View OHLCV candle data
   trades               View recent trades (tape) for an asset
   markets              View market data for main perps
-  all-markets          View all markets (perps, HIP-3, spot)
+  all-markets          View all markets (perps, HIP-3, spot, HIP-4)
   search               Search for assets across all providers
   spot                 View spot markets and balances
   rate-limit           View API rate limit status
   funding-scan         Scan funding rates across all dexes (main + HIP-3)
+  outcomes             Search and inspect HIP-4 outcome markets
 
 Trading Commands:
   buy                  Market buy order
@@ -95,6 +102,13 @@ Spot Trading:
   spot-buy             Spot buy order
   spot-sell            Spot sell order
   spot-order           Spot order (market or limit, specify --side)
+
+HIP-4 Outcome Trading:
+  outcome-buy          Buy a YES/NO outcome token
+  outcome-sell         Sell a YES/NO outcome token
+  outcome-open         Alias for outcome-buy
+  outcome-close        Alias for outcome-sell
+  outcome-order        Outcome order (market or limit, specify --side)
 
 Advanced Execution:
   twap                 Native TWAP order (exchange-managed)
@@ -127,6 +141,8 @@ Examples:
   openbroker buy --coin ETH --size 0.1          # Market buy 0.1 ETH
   openbroker limit --coin BTC --side buy --size 0.01 --price 60000
   openbroker search --query GOLD                # Find GOLD across providers
+  openbroker outcomes --query BTC               # Find HIP-4 outcome markets
+  openbroker outcome-buy --outcome 123 --outcome-side yes --size 10 --dry
   openbroker tpsl --coin HYPE --tp 40 --sl 30   # Set TP/SL on position
 
 Documentation: https://github.com/aurracloud/open-broker
@@ -202,6 +218,14 @@ function main() {
   }
   if (command === 'spot-sell') {
     runScript(commands['spot-order'].script, ['--side', 'sell', ...commandArgs]);
+    return;
+  }
+  if (command === 'outcome-buy' || command === 'outcome-open') {
+    runScript(commands['outcome-order'].script, ['--side', 'buy', ...commandArgs]);
+    return;
+  }
+  if (command === 'outcome-sell' || command === 'outcome-close') {
+    runScript(commands['outcome-order'].script, ['--side', 'sell', ...commandArgs]);
     return;
   }
 

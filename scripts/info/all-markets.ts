@@ -4,7 +4,7 @@
 import { getClient } from '../core/client.js';
 
 interface Args {
-  type?: 'perp' | 'spot' | 'hip3' | 'all';
+  type?: 'perp' | 'spot' | 'hip3' | 'outcome' | 'all';
   top?: number;
   verbose?: boolean;
   json?: boolean;
@@ -17,7 +17,7 @@ function parseArgs(): Args {
     const arg = process.argv[i];
     if (arg === '--type' && process.argv[i + 1]) {
       const val = process.argv[++i].toLowerCase();
-      if (['perp', 'spot', 'hip3', 'all'].includes(val)) {
+      if (['perp', 'spot', 'hip3', 'outcome', 'all'].includes(val)) {
         args.type = val as Args['type'];
       }
     } else if (arg === '--top' && process.argv[i + 1]) {
@@ -33,7 +33,7 @@ All Markets - View all available markets on Hyperliquid
 Usage: npx tsx scripts/info/all-markets.ts [options]
 
 Options:
-  --type <type>    Market type: perp, spot, hip3, or all (default: all)
+  --type <type>    Market type: perp, spot, hip3, outcome, or all (default: all)
   --top <n>        Show only top N markets by volume
   --json           Output as JSON (machine-readable)
   --verbose        Show detailed output
@@ -44,6 +44,7 @@ Examples:
   npx tsx scripts/info/all-markets.ts --type perp    # Show only main perps
   npx tsx scripts/info/all-markets.ts --type hip3    # Show only HIP-3 perps
   npx tsx scripts/info/all-markets.ts --type spot    # Show only spot markets
+  npx tsx scripts/info/all-markets.ts --type outcome # Show only HIP-4 outcomes
   npx tsx scripts/info/all-markets.ts --top 20       # Show top 20 by volume
   npx tsx scripts/info/all-markets.ts --json         # JSON output
 `);
@@ -77,7 +78,7 @@ function formatFunding(rate: string): string {
 }
 
 interface MarketRow {
-  type: 'perp' | 'spot' | 'hip3';
+  type: 'perp' | 'spot' | 'hip3' | 'outcome';
   provider: string;
   coin: string;
   assetId: number;
@@ -85,6 +86,9 @@ interface MarketRow {
   volume24h: number;
   funding?: string;
   maxLeverage?: number;
+  outcome?: number;
+  outcomeSide?: string;
+  description?: string;
 }
 
 async function main() {
@@ -183,6 +187,30 @@ async function main() {
     }
   }
 
+  // Fetch HIP-4 outcomes
+  if (args.type === 'all' || args.type === 'outcome') {
+    try {
+      const outcomes = await client.getOutcomeMarkets();
+      for (const market of outcomes) {
+        for (const side of market.sides) {
+          allMarkets.push({
+            type: 'outcome',
+            provider: 'HIP-4',
+            coin: side.coin,
+            assetId: side.assetId,
+            price: side.midPx ?? side.markPx ?? '0',
+            volume24h: parseFloat(side.dayNtlVlm || '0'),
+            outcome: market.outcome,
+            outcomeSide: side.name,
+            description: market.description,
+          });
+        }
+      }
+    } catch (e) {
+      if (args.verbose) console.error('Failed to fetch HIP-4 outcomes:', e);
+    }
+  }
+
   // Sort by volume
   allMarkets.sort((a, b) => b.volume24h - a.volume24h);
 
@@ -198,6 +226,7 @@ async function main() {
   const perps = markets.filter((m) => m.type === 'perp');
   const hip3 = markets.filter((m) => m.type === 'hip3');
   const spots = markets.filter((m) => m.type === 'spot');
+  const outcomes = markets.filter((m) => m.type === 'outcome');
 
   // Print summary
   console.log('=== Market Summary ===\n');
@@ -205,6 +234,7 @@ async function main() {
   console.log(`  - Main Perps: ${perps.length}`);
   console.log(`  - HIP-3 Perps: ${hip3.length}`);
   console.log(`  - Spot Markets: ${spots.length}`);
+  console.log(`  - HIP-4 Outcomes: ${outcomes.length}`);
   console.log();
 
   // Print perps
@@ -241,6 +271,19 @@ async function main() {
     for (const m of spots) {
       console.log(
         `${m.coin.padEnd(14)} ${String(m.assetId).padStart(7)}    ${formatPrice(m.price).padStart(16)} ${formatVolume(m.volume24h).padStart(13)}`
+      );
+    }
+    console.log();
+  }
+
+  // Print HIP-4 outcome markets
+  if (outcomes.length > 0) {
+    console.log('=== HIP-4 Outcomes ===\n');
+    console.log('Coin           Outcome   Side      AssetID    Price       24h Volume');
+    console.log('-'.repeat(78));
+    for (const m of outcomes) {
+      console.log(
+        `${m.coin.padEnd(14)} ${String(m.outcome ?? '-').padStart(7)}   ${(m.outcomeSide ?? '-').padEnd(8)} ${String(m.assetId).padStart(9)}    ${formatPrice(m.price).padStart(7)} ${formatVolume(m.volume24h).padStart(13)}`
       );
     }
     console.log();

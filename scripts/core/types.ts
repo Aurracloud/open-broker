@@ -119,6 +119,56 @@ export interface MetaAndAssetCtxs {
   assetCtxs: AssetCtx[];
 }
 
+// ============ Outcome / HIP-4 Types ============
+
+export interface OutcomeSideSpec {
+  name: string;
+  token?: number;
+}
+
+export interface OutcomeMetaEntry {
+  outcome: number;
+  name: string;
+  description: string;
+  sideSpecs: OutcomeSideSpec[];
+}
+
+export interface OutcomeQuestion {
+  question: number;
+  name: string;
+  description: string;
+  fallbackOutcome: number;
+  namedOutcomes: number[];
+  settledNamedOutcomes?: number[];
+}
+
+export interface OutcomeMetaResponse {
+  outcomes: OutcomeMetaEntry[];
+  questions?: OutcomeQuestion[];
+}
+
+export interface OutcomeMarket {
+  outcome: number;
+  name: string;
+  description: string;
+  parsedDescription: Record<string, string>;
+  sides: Array<{
+    side: 0 | 1;
+    name: string;
+    encoding: number;
+    coin: string;
+    tokenName: string;
+    assetId: number;
+    token?: number;
+    szDecimals?: number;
+    midPx?: string;
+    markPx?: string;
+    prevDayPx?: string;
+    dayNtlVlm?: string;
+  }>;
+  question?: OutcomeQuestion;
+}
+
 // ============ Account Types ============
 
 export interface Position {

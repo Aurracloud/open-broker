@@ -5,7 +5,7 @@ import { getClient } from '../core/client.js';
 
 interface Args {
   query: string;
-  type?: 'perp' | 'spot' | 'hip3' | 'all';
+  type?: 'perp' | 'spot' | 'hip3' | 'outcome' | 'all';
   verbose?: boolean;
   json?: boolean;
 }
@@ -19,7 +19,7 @@ function parseArgs(): Args {
       args.query = process.argv[++i];
     } else if (arg === '--type' && process.argv[i + 1]) {
       const val = process.argv[++i].toLowerCase();
-      if (['perp', 'spot', 'hip3', 'all'].includes(val)) {
+      if (['perp', 'spot', 'hip3', 'outcome', 'all'].includes(val)) {
         args.type = val as Args['type'];
       }
     } else if (arg === '--verbose') {
@@ -34,7 +34,7 @@ Usage: npx tsx scripts/info/search-markets.ts --query <search> [options]
 
 Options:
   --query <search>  Search term (required) - matches coin name
-  --type <type>     Filter by market type: perp, spot, hip3, or all (default: all)
+  --type <type>     Filter by market type: perp, spot, hip3, outcome, or all (default: all)
   --json            Output as JSON (machine-readable)
   --verbose         Show detailed output
   --help            Show this help
@@ -44,6 +44,7 @@ Examples:
   npx tsx scripts/info/search-markets.ts --query BTC        # Find all BTC markets
   npx tsx scripts/info/search-markets.ts --query ETH --type perp  # ETH perps only
   npx tsx scripts/info/search-markets.ts --query PURR --type spot # PURR spot only
+  npx tsx scripts/info/search-markets.ts --query BTC --type outcome # HIP-4 outcomes only
   npx tsx scripts/info/search-markets.ts --query HYPE --json      # JSON output
 `);
       process.exit(0);
@@ -95,7 +96,7 @@ async function main() {
   }
 
   interface Result {
-    type: 'perp' | 'spot' | 'hip3';
+    type: 'perp' | 'spot' | 'hip3' | 'outcome';
     provider: string;
     coin: string;
     assetId: number;
@@ -104,6 +105,9 @@ async function main() {
     funding?: string;
     maxLeverage?: number;
     openInterest?: string;
+    outcome?: number;
+    outcomeSide?: string;
+    description?: string;
   }
 
   const results: Result[] = [];
@@ -224,6 +228,34 @@ async function main() {
     }
   }
 
+  // Search HIP-4 outcome markets
+  if (args.type === 'all' || args.type === 'outcome') {
+    try {
+      const outcomes = await client.getOutcomeMarkets();
+      for (const market of outcomes) {
+        const parsed = Object.values(market.parsedDescription).join(' ');
+        const searchable = `${market.name} ${market.description} ${parsed}`.toUpperCase();
+        if (!searchable.includes(query)) continue;
+
+        for (const side of market.sides) {
+          results.push({
+            type: 'outcome',
+            provider: 'HIP-4',
+            coin: side.coin,
+            assetId: side.assetId,
+            price: side.midPx ?? side.markPx ?? '0',
+            volume24h: parseFloat(side.dayNtlVlm || '0'),
+            outcome: market.outcome,
+            outcomeSide: side.name,
+            description: market.description,
+          });
+        }
+      }
+    } catch (e) {
+      if (args.verbose) console.error('Failed to fetch HIP-4 outcomes:', e);
+    }
+  }
+
   // Sort by volume
   results.sort((a, b) => b.volume24h - a.volume24h);
 
@@ -242,11 +274,14 @@ async function main() {
   console.log('-'.repeat(112));
 
   for (const m of results) {
-    const typeStr = m.type === 'hip3' ? 'HIP-3' : m.type.charAt(0).toUpperCase() + m.type.slice(1);
+    const typeStr = m.type === 'hip3' ? 'HIP-3' : m.type === 'outcome' ? 'HIP-4' : m.type.charAt(0).toUpperCase() + m.type.slice(1);
     const oi = m.openInterest ? formatVolume(parseFloat(m.openInterest)) : '-';
     console.log(
       `${typeStr.padEnd(8)} ${m.provider.padEnd(16)} ${m.coin.padEnd(14)} ${String(m.assetId).padStart(7)}    ${formatPrice(m.price).padStart(16)} ${formatVolume(m.volume24h).padStart(13)} ${(m.funding ? formatFunding(m.funding) : '-').padStart(14)} ${oi.padStart(10)}`
     );
+    if (m.type === 'outcome' && args.verbose) {
+      console.log(`         Outcome ${m.outcome} ${m.outcomeSide}: ${m.description}`);
+    }
   }
 
   // Show comparison if same asset on multiple providers

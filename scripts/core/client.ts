@@ -13,6 +13,9 @@ import type {
   AssetCtx,
   ClearinghouseState,
   OpenOrder,
+  OutcomeMetaResponse,
+  OutcomeMarket,
+  OutcomeQuestion,
 } from './types.js';
 import { loadConfig, isMainnet } from './config.js';
 import { roundPrice, roundSize } from './utils.js';
@@ -51,6 +54,8 @@ export class HyperliquidClient {
   private spotSzDecimalsMap: Map<string, number> = new Map();
   /** Whether spot metadata has been loaded */
   private spotMetaLoaded: boolean = false;
+  /** HIP-4 outcome metadata cache */
+  private outcomeMeta: OutcomeMetaResponse | null = null;
   public verbose: boolean = false;
 
   constructor(config?: OpenBrokerConfig) {
@@ -656,6 +661,247 @@ export class HyperliquidClient {
       meta: data[0],
       assetCtxs: data[1],
     };
+  }
+
+  // ============ HIP-4 Outcomes ============
+
+  private parseOutcomeDescription(description: string): Record<string, string> {
+    const parsed: Record<string, string> = {};
+    for (const part of description.split('|')) {
+      const idx = part.indexOf(':');
+      if (idx <= 0) continue;
+      parsed[part.slice(0, idx)] = part.slice(idx + 1);
+    }
+    return parsed;
+  }
+
+  private normalizeOutcomeSide(side: string | number): 0 | 1 {
+    if (typeof side === 'number') {
+      if (side === 0 || side === 1) return side;
+    } else {
+      const normalized = side.trim().toLowerCase();
+      if (normalized === '0' || normalized === 'yes' || normalized === 'y') return 0;
+      if (normalized === '1' || normalized === 'no' || normalized === 'n') return 1;
+    }
+    throw new Error(`Invalid outcome side "${side}". Use yes/no or 0/1.`);
+  }
+
+  getOutcomeEncoding(outcome: number, side: 0 | 1): number {
+    return 10 * outcome + side;
+  }
+
+  getOutcomeCoin(outcome: number, side: 0 | 1): string {
+    return `#${this.getOutcomeEncoding(outcome, side)}`;
+  }
+
+  getOutcomeAssetId(outcome: number, side: 0 | 1): number {
+    return 100_000_000 + this.getOutcomeEncoding(outcome, side);
+  }
+
+  resolveOutcomeRef(ref: string | number, side?: string | number): {
+    outcome: number;
+    side: 0 | 1;
+    encoding: number;
+    coin: string;
+    tokenName: string;
+    assetId: number;
+  } {
+    if (typeof ref === 'number') {
+      const resolvedSide = this.normalizeOutcomeSide(side ?? 0);
+      const encoding = this.getOutcomeEncoding(ref, resolvedSide);
+      return {
+        outcome: ref,
+        side: resolvedSide,
+        encoding,
+        coin: `#${encoding}`,
+        tokenName: `+${encoding}`,
+        assetId: 100_000_000 + encoding,
+      };
+    }
+
+    const trimmed = ref.trim();
+    const encoded = trimmed.startsWith('#') || trimmed.startsWith('+')
+      ? parseInt(trimmed.slice(1), 10)
+      : NaN;
+
+    if (!Number.isNaN(encoded)) {
+      const resolvedSide = encoded % 10;
+      if (resolvedSide !== 0 && resolvedSide !== 1) {
+        throw new Error(`Invalid outcome encoding "${ref}". Outcome side must encode to 0 or 1.`);
+      }
+      const outcome = Math.floor(encoded / 10);
+      return {
+        outcome,
+        side: resolvedSide as 0 | 1,
+        encoding: encoded,
+        coin: `#${encoded}`,
+        tokenName: `+${encoded}`,
+        assetId: 100_000_000 + encoded,
+      };
+    }
+
+    const outcome = parseInt(trimmed, 10);
+    if (!Number.isFinite(outcome) || outcome < 0) {
+      throw new Error(`Invalid outcome reference "${ref}". Use an outcome id, #<encoding>, or +<encoding>.`);
+    }
+
+    const resolvedSide = this.normalizeOutcomeSide(side ?? 0);
+    const encoding = this.getOutcomeEncoding(outcome, resolvedSide);
+    return {
+      outcome,
+      side: resolvedSide,
+      encoding,
+      coin: `#${encoding}`,
+      tokenName: `+${encoding}`,
+      assetId: 100_000_000 + encoding,
+    };
+  }
+
+  async getOutcomeMeta(): Promise<OutcomeMetaResponse> {
+    if (this.outcomeMeta) return this.outcomeMeta;
+
+    this.log('Fetching outcomeMeta...');
+    const data = await this.postInfo<OutcomeMetaResponse>({ type: 'outcomeMeta' }, 'outcomeMeta');
+    if (!data || !Array.isArray(data.outcomes)) {
+      throw new Error('outcomeMeta returned empty/malformed payload.');
+    }
+    this.outcomeMeta = {
+      outcomes: data.outcomes,
+      questions: data.questions ?? [],
+    };
+    this.log(`Loaded ${this.outcomeMeta.outcomes.length} outcome markets`);
+    return this.outcomeMeta;
+  }
+
+  private async getOutcomeCtxMap(): Promise<Map<string, {
+    coin?: string;
+    dayNtlVlm?: string;
+    markPx?: string;
+    midPx?: string | null;
+    prevDayPx?: string;
+  }>> {
+    const ctxMap = new Map<string, {
+      coin?: string;
+      dayNtlVlm?: string;
+      markPx?: string;
+      midPx?: string | null;
+      prevDayPx?: string;
+    }>();
+
+    try {
+      const spotData = await this.getSpotMetaAndAssetCtxs();
+      for (const ctx of spotData.assetCtxs) {
+        if (ctx.coin) ctxMap.set(ctx.coin, ctx);
+      }
+    } catch (e) {
+      this.log('Unable to load spot/outcome contexts:', e);
+    }
+
+    try {
+      const mids = await this.getAllMids();
+      for (const [coin, midPx] of Object.entries(mids)) {
+        if (!coin.startsWith('#')) continue;
+        const existing = ctxMap.get(coin) ?? { coin };
+        existing.midPx = existing.midPx ?? midPx;
+        existing.markPx = existing.markPx ?? midPx;
+        ctxMap.set(coin, existing);
+      }
+    } catch (e) {
+      this.log('Unable to load allMids for outcomes:', e);
+    }
+
+    return ctxMap;
+  }
+
+  async getOutcomeMarkets(): Promise<OutcomeMarket[]> {
+    const [meta, spotMeta, ctxMap] = await Promise.all([
+      this.getOutcomeMeta(),
+      this.getSpotMeta().catch(() => null),
+      this.getOutcomeCtxMap(),
+    ]);
+
+    const tokenDecimals = new Map<number, number>();
+    if (spotMeta) {
+      for (const token of spotMeta.tokens) {
+        tokenDecimals.set(token.index, token.szDecimals);
+      }
+    }
+
+    const questions = new Map<number, OutcomeQuestion>();
+    for (const question of meta.questions ?? []) {
+      for (const outcome of question.namedOutcomes) {
+        questions.set(outcome, question);
+      }
+      questions.set(question.fallbackOutcome, question);
+    }
+
+    return meta.outcomes.map((outcome) => {
+      const sides = outcome.sideSpecs.map((sideSpec, idx) => {
+        const side = idx as 0 | 1;
+        const encoding = this.getOutcomeEncoding(outcome.outcome, side);
+        const coin = `#${encoding}`;
+        const ctx = ctxMap.get(coin);
+        return {
+          side,
+          name: sideSpec.name,
+          encoding,
+          coin,
+          tokenName: `+${encoding}`,
+          assetId: 100_000_000 + encoding,
+          token: sideSpec.token,
+          szDecimals: sideSpec.token !== undefined ? tokenDecimals.get(sideSpec.token) : undefined,
+          midPx: ctx?.midPx ?? undefined,
+          markPx: ctx?.markPx,
+          prevDayPx: ctx?.prevDayPx,
+          dayNtlVlm: ctx?.dayNtlVlm,
+        };
+      });
+
+      return {
+        outcome: outcome.outcome,
+        name: outcome.name,
+        description: outcome.description,
+        parsedDescription: this.parseOutcomeDescription(outcome.description),
+        sides,
+        question: questions.get(outcome.outcome),
+      };
+    });
+  }
+
+  async getOutcomeMarket(outcomeId: number): Promise<OutcomeMarket | null> {
+    const markets = await this.getOutcomeMarkets();
+    return markets.find((market) => market.outcome === outcomeId) ?? null;
+  }
+
+  async getOutcomeSzDecimals(outcome: number, side: 0 | 1): Promise<number> {
+    const market = await this.getOutcomeMarket(outcome);
+    return market?.sides.find((s) => s.side === side)?.szDecimals ?? 0;
+  }
+
+  async getOutcomeMidPrice(outcome: number, side: 0 | 1): Promise<number> {
+    const coin = this.getOutcomeCoin(outcome, side);
+    const markets = await this.getOutcomeMarkets();
+    const marketSide = markets
+      .find((market) => market.outcome === outcome)
+      ?.sides.find((s) => s.side === side);
+    const fromMeta = marketSide?.midPx ?? marketSide?.markPx;
+    if (fromMeta) {
+      const mid = parseFloat(fromMeta);
+      if (mid > 0) return mid;
+    }
+
+    const mids = await this.getAllMids();
+    const mid = parseFloat(mids[coin] || '0');
+    if (mid > 0) return mid;
+
+    try {
+      const book = await this.getL2Book(coin);
+      if (book.midPrice > 0) return book.midPrice;
+    } catch (e) {
+      this.log(`Unable to fetch outcome L2 book for ${coin}:`, e);
+    }
+
+    throw new Error(`No outcome price for ${coin}. The market may not be open or may have no liquidity.`);
   }
 
   /**
@@ -2343,6 +2589,118 @@ export class HyperliquidClient {
       size,
       price,
       { limit: { tif } },
+    );
+  }
+
+  /**
+   * Place a HIP-4 outcome order.
+   * Outcome assets are spot-like, but encoded as:
+   *   encoding = 10 * outcome + side
+   *   assetId = 100_000_000 + encoding
+   *   coin = #<encoding>
+   *
+   * Side 0 is usually YES and side 1 is usually NO, per outcomeMeta.sideSpecs.
+   */
+  async outcomeOrder(
+    outcomeRef: string | number,
+    outcomeSide: string | number | undefined,
+    isBuy: boolean,
+    size: number,
+    price: number,
+    orderType: { limit: { tif: 'Gtc' | 'Ioc' | 'Alo' } },
+    includeBuilder: boolean = true,
+    szDecimalsOverride?: number,
+  ): Promise<OrderResponse> {
+    await this.requireTrading();
+
+    const resolved = this.resolveOutcomeRef(outcomeRef, outcomeSide);
+    const szDecimals = szDecimalsOverride ?? await this.getOutcomeSzDecimals(resolved.outcome, resolved.side);
+
+    const orderWire = {
+      a: resolved.assetId,
+      b: isBuy,
+      p: roundPrice(price, szDecimals, true),
+      s: roundSize(size, szDecimals),
+      r: false,
+      t: orderType,
+    };
+
+    this.log('Placing outcome order:', JSON.stringify({ resolved, orderWire }, null, 2));
+
+    const orderRequest: {
+      orders: typeof orderWire[];
+      grouping: 'na';
+      builder?: BuilderInfo;
+    } = {
+      orders: [orderWire],
+      grouping: 'na',
+    };
+
+    if (includeBuilder && !this.isTestnet && this.config.builderAddress !== '0x0000000000000000000000000000000000000000') {
+      orderRequest.builder = this.builderInfo;
+      this.log('Including builder fee:', this.builderInfo);
+    }
+
+    try {
+      const response = await this.exchange.order(orderRequest, this.vaultParam);
+      this.log('Outcome order response:', JSON.stringify(response, null, 2));
+      return response as unknown as OrderResponse;
+    } catch (error) {
+      this.log('Outcome order error:', error);
+      return {
+        status: 'err',
+        response: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  async outcomeMarketOrder(
+    outcomeRef: string | number,
+    outcomeSide: string | number | undefined,
+    isBuy: boolean,
+    size: number,
+    slippageBps?: number,
+    szDecimalsOverride?: number,
+  ): Promise<OrderResponse> {
+    const resolved = this.resolveOutcomeRef(outcomeRef, outcomeSide);
+    const midPrice = await this.getOutcomeMidPrice(resolved.outcome, resolved.side);
+    const slippage = (slippageBps ?? this.config.slippageBps) / 10000;
+    const limitPrice = isBuy
+      ? midPrice * (1 + slippage)
+      : midPrice * (1 - slippage);
+
+    this.log(`Outcome market order: ${resolved.coin} ${isBuy ? 'BUY' : 'SELL'} ${size} @ ${limitPrice} (mid: ${midPrice})`);
+
+    return this.outcomeOrder(
+      outcomeRef,
+      outcomeSide,
+      isBuy,
+      size,
+      limitPrice,
+      { limit: { tif: 'Ioc' } },
+      true,
+      szDecimalsOverride,
+    );
+  }
+
+  async outcomeLimitOrder(
+    outcomeRef: string | number,
+    outcomeSide: string | number | undefined,
+    isBuy: boolean,
+    size: number,
+    price: number,
+    tif: 'Gtc' | 'Ioc' | 'Alo' = 'Gtc',
+    szDecimalsOverride?: number,
+  ): Promise<OrderResponse> {
+    return this.outcomeOrder(
+      outcomeRef,
+      outcomeSide,
+      isBuy,
+      size,
+      price,
+      { limit: { tif } },
+      true,
+      szDecimalsOverride,
     );
   }
 

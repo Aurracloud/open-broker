@@ -288,6 +288,12 @@ function createAuditedClient(
 async function buildSnapshot(
   client: HyperliquidClient,
 ): Promise<AutomationSnapshot> {
+  // `metaAndAssetCtxs` contains both mostly-static market metadata and live
+  // funding/premium values. The client caches it for market lookups, so clear
+  // it before each automation poll snapshot or funding_update events freeze at
+  // the first fetched value.
+  client.invalidateMetaCache();
+
   const [state, mids, metaCtxs] = await Promise.all([
     client.getUserStateAll(),
     client.getAllMids(),
@@ -321,20 +327,29 @@ async function buildSnapshot(
 
   // Build funding rates from asset contexts
   const fundingRates = new Map<string, { rate: number; premium: number }>();
-  if (metaCtxs && Array.isArray(metaCtxs)) {
-    for (const group of metaCtxs) {
-      if (!group.universe || !group.assetCtxs) continue;
-      for (let i = 0; i < group.universe.length; i++) {
-        const meta = group.universe[i];
-        const ctx = group.assetCtxs[i];
-        if (ctx && meta) {
-          fundingRates.set(meta.name, {
-            rate: parseFloat(ctx.funding || '0'),
-            premium: parseFloat(ctx.premium || '0'),
-          });
-        }
+  const addFundingRates = (
+    universe: Array<{ name?: string }> | undefined,
+    assetCtxs: Array<{ funding?: string | number | null; premium?: string | number | null }> | undefined,
+  ) => {
+    if (!universe || !assetCtxs) return;
+    for (let i = 0; i < universe.length; i++) {
+      const meta = universe[i];
+      const ctx = assetCtxs[i];
+      if (ctx && meta?.name) {
+        fundingRates.set(meta.name, {
+          rate: parseFloat(String(ctx.funding || '0')),
+          premium: parseFloat(String(ctx.premium || '0')),
+        });
       }
     }
+  };
+
+  if (metaCtxs && Array.isArray(metaCtxs)) {
+    for (const group of metaCtxs) {
+      addFundingRates(group.universe, group.assetCtxs);
+    }
+  } else if (metaCtxs) {
+    addFundingRates(metaCtxs.meta?.universe, metaCtxs.assetCtxs);
   }
 
   return {

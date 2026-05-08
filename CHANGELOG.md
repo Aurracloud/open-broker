@@ -2,6 +2,20 @@
 
 All notable changes to Open Broker will be documented in this file.
 
+## [1.3.0] - 2026-05-07
+
+### Added
+- **`openbroker auto prune`**: New subcommand for trimming the local audit DB
+  - `--older-than <duration>` accepts `7d`, `24h`, `30m`, etc.
+  - `--status <list>` filters by run status (default: `stopped,error,stale`)
+  - `--keep-last <N>` retains the N most-recent runs per `automation_id`
+  - `--all` deletes everything except runs whose process is still alive
+  - `--vacuum` reclaims disk after deletion
+  - `--dry` previews matches without writing — also reconcile is dry-safe
+
+### Changed
+- **`openbroker auto clean`**: Now also reconciles the audit DB. Runs whose pid is dead but whose row still says `status='running'` get marked `stopped` with `stop_reason='reconciled (process exited)'`, fixing dashboards that previously kept rendering them as live/stale long after `auto stop`.
+
 ## [1.0.59] - 2026-03-11
 
 ### Fixed

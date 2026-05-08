@@ -1067,7 +1067,11 @@ export class HyperliquidClient {
 
     const response = await fetch(baseUrl + '/info', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-cache, no-store, max-age=0',
+        Pragma: 'no-cache',
+      },
       body: JSON.stringify({ type: 'predictedFundings' }),
     });
     const data = await response.json() as Array<[

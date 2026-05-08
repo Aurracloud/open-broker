@@ -23,7 +23,8 @@ Usage:
   openbroker auto stop <id>                 Unregister an automation (won't restart)
   openbroker auto list                      List available automations
   openbroker auto status                    Show running automations
-  openbroker auto clean                     Remove stale entries from registry
+  openbroker auto clean                     Remove stale entries from registry + reconcile audit DB
+  openbroker auto prune [options]           Delete stale runs from the audit DB
 
 Options (for run):
   --example <name>   Run a bundled example (dca, grid, funding-arb, mm-spread, mm-maker)
@@ -33,6 +34,14 @@ Options (for run):
   --id <name>        Custom automation ID (default: filename)
   --poll <ms>        Poll interval in milliseconds (default: 10000)
   --no-ws            Disable WebSocket; fall back to REST-only polling
+
+Options (for prune):
+  --older-than <d>   Only prune runs started before this duration ago (e.g. 7d, 24h)
+  --status <list>    CSV of statuses to consider (default: stopped,error,stale)
+  --keep-last <N>    Keep the N most-recent runs per automation_id
+  --all              Prune everything except runs that are still alive
+  --vacuum           VACUUM the DB after deletion to reclaim disk space
+  --dry              Preview what would be deleted without writing
 
 Scripts are loaded from:
   1. Absolute or relative path
@@ -288,9 +297,83 @@ function stopCommand(positional: string[]) {
   console.log(`Unregistered: ${id} (will not restart on next gateway start)`);
 }
 
-function cleanCommand() {
+async function cleanCommand() {
   cleanRegistry();
   console.log('Cleaned stale entries from registry');
+
+  // Also reconcile the audit DB so dead processes whose rows still say
+  // 'running' get marked 'stopped'. Without this, the dashboard keeps showing
+  // 'stale' badges for automations the operator already cleaned out of the
+  // registry.
+  try {
+    const { prune } = await import('./prune.js');
+    const result = prune({ reconcileOnly: true });
+    if (result.reconciled > 0) {
+      console.log(`Reconciled ${result.reconciled} orphan run row${result.reconciled === 1 ? '' : 's'} in audit DB (status: running → stopped)`);
+    } else {
+      console.log('Audit DB already consistent');
+    }
+  } catch (err) {
+    console.warn(`Could not reconcile audit DB: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+async function pruneCommand(args: Record<string, string | boolean>) {
+  const { fmtBytes, parseDuration, prune } = await import('./prune.js');
+  const olderThanRaw = args['older-than'];
+  const olderThanMs = typeof olderThanRaw === 'string' ? parseDuration(olderThanRaw) : undefined;
+  const statusesRaw = typeof args.status === 'string' ? args.status : undefined;
+  const statuses = statusesRaw
+    ? new Set(statusesRaw.split(',').map((s) => s.trim()).filter(Boolean))
+    : undefined;
+  const keepLastRaw = args['keep-last'];
+  const keepLast = typeof keepLastRaw === 'string' ? Number(keepLastRaw)
+    : typeof keepLastRaw === 'number' ? keepLastRaw
+    : undefined;
+  if (keepLast !== undefined && (!Number.isFinite(keepLast) || keepLast < 0)) {
+    console.error('Error: --keep-last must be a non-negative integer');
+    process.exit(1);
+  }
+
+  const opts = {
+    olderThanMs,
+    statuses,
+    keepLastPerAutomation: keepLast,
+    all: args.all === true,
+    vacuum: args.vacuum === true,
+    dryRun: args.dry === true,
+  };
+
+  const result = prune(opts);
+
+  if (result.reconciled > 0) {
+    const verb = result.dryRun ? 'Would reconcile' : 'Reconciled';
+    console.log(`${verb} ${result.reconciled} orphan run row${result.reconciled === 1 ? '' : 's'} (running → stopped)`);
+  }
+
+  const verb = result.dryRun ? 'Would delete' : 'Deleted';
+  if (result.candidateRunIds.length === 0) {
+    console.log('No runs matched pruning filters.');
+    return;
+  }
+  console.log(`${verb} ${result.candidateRunIds.length} automation run${result.candidateRunIds.length === 1 ? '' : 's'}:`);
+  for (const id of result.candidateRunIds.slice(0, 25)) {
+    console.log(`  · ${id}`);
+  }
+  if (result.candidateRunIds.length > 25) {
+    console.log(`  … and ${result.candidateRunIds.length - 25} more`);
+  }
+  if (!result.dryRun) {
+    const totalChild = Object.values(result.deletedRows).reduce((a, b) => a + b, 0);
+    console.log(`Removed ${totalChild.toLocaleString()} child rows across ${Object.keys(result.deletedRows).length} tables`);
+    if (result.freedBytes > 0) {
+      console.log(`Reclaimed ~${fmtBytes(result.freedBytes)}${opts.vacuum ? ' (post-VACUUM)' : ''}`);
+    } else if (opts.vacuum) {
+      console.log('No disk reclaimed (VACUUM completed)');
+    } else {
+      console.log('Run again with --vacuum to reclaim disk space.');
+    }
+  }
 }
 
 function reportCommand(rawArgs: string[]) {
@@ -364,7 +447,10 @@ async function main() {
       statusCommand();
       break;
     case 'clean':
-      cleanCommand();
+      await cleanCommand();
+      break;
+    case 'prune':
+      await pruneCommand(args);
       break;
     case 'report':
       reportCommand(restArgs);

@@ -25,6 +25,9 @@ const child = spawn(
       OPENBROKER_CWD: process.cwd(),
       // Suppress Node.js experimental warnings
       NODE_NO_WARNINGS: '1',
+      // node:sqlite is stable in Node 24+, experimental-with-flag in 22/23.
+      // The flag is accepted (as a no-op) on 24+, so it's safe to set unconditionally.
+      NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''} --experimental-sqlite`.trim(),
     },
   }
 );
@@ -42,6 +45,7 @@ child.on('error', (err) => {
           ...process.env,
           OPENBROKER_CWD: process.cwd(),
           NODE_NO_WARNINGS: '1',
+          NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''} --experimental-sqlite`.trim(),
         },
       }
     );

@@ -1,6 +1,6 @@
 {
   "name": "openbroker",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "description": "Hyperliquid trading CLI - execute orders, manage positions, and run trading strategies",
   "type": "module",
   "bin": {
@@ -15,6 +15,7 @@
     "bin/",
     "scripts/",
     "config/example.env",
+    "SKILL.md",
     "README.md",
     "CHANGELOG.md"
   ],
@@ -49,7 +50,6 @@
   "dependencies": {
     "@nktkas/hyperliquid": "^0.30.3",
     "dotenv": "^17.2.3",
-    "openbroker-monitoring": "file:../openbroker-monitoring",
     "tsx": "^4.19.0",
     "viem": "^2.21.0"
   },

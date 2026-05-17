@@ -15,6 +15,7 @@ import { AutomationEventBus } from './events.js';
 import { loadAutomation } from './loader.js';
 import { registerAutomation, unregisterAutomation, getRegisteredAutomations as getRegisteredFromFile } from './registry.js';
 import { createAutomationAudit, toSerializable, type AutomationAuditSink } from './audit.js';
+import { startKeepAwake, type KeepAwakeHandle } from './keep-awake.js';
 import type {
   AutomationAPI,
   AutomationAuditObserver,
@@ -451,6 +452,11 @@ export interface RuntimeOptions {
    * @default true
    */
   useWebSocket?: boolean;
+  /**
+   * Best-effort host idle-sleep inhibition for the lifetime of the automation.
+   * Enabled by default for live runs and disabled by default for dry runs.
+   */
+  keepAwake?: boolean;
 }
 
 /** Registry of all running automations */
@@ -516,6 +522,14 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
   stateController.attachAudit(audit);
 
   const log = createLogger(id, verbose, audit);
+  const keepAwakeEnabled = options.keepAwake ?? !dryRun;
+  let keepAwake: KeepAwakeHandle | null = null;
+  if (keepAwakeEnabled) {
+    keepAwake = startKeepAwake(`OpenBroker automation ${id} is running`, log);
+    if (keepAwake) {
+      log.info(`keep-awake enabled via ${keepAwake.backend}.`);
+    }
+  }
   const observers = await loadConventionObservers(log);
   const baseClient = dryRun ? createDryClient(rawClient, log) : rawClient;
   const client = createAuditedClient(baseClient, audit, dryRun, observers);
@@ -576,6 +590,7 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
       pollCount: 0,
       eventsEmitted: 0,
     });
+    keepAwake?.stop();
     throw error;
   }
 
@@ -948,6 +963,8 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
         log.error(`onStop hook error: ${error.message}`);
       }
     }
+
+    keepAwake?.stop();
 
     eventBus.removeAll();
     registry.delete(id);

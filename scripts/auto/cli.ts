@@ -34,6 +34,7 @@ Options (for run):
   --id <name>        Custom automation ID (default: filename)
   --poll <ms>        Poll interval in milliseconds (default: 10000)
   --no-ws            Disable WebSocket; fall back to REST-only polling
+  --allow-sleep      Do not request OS idle-sleep inhibition for this run
 
 Options (for prune):
   --older-than <d>   Only prune runs started before this duration ago (e.g. 7d, 24h)
@@ -125,6 +126,7 @@ async function runCommand(args: Record<string, string | boolean>, positional: st
   const dryRun = args.dry === true;
   const verbose = args.verbose === true;
   const useWebSocket = args['no-ws'] !== true;
+  const keepAwake = args['allow-sleep'] === true ? false : undefined;
   const pollIntervalMs = args.poll ? parseInt(String(args.poll), 10) : undefined;
   const id = args.id ? String(args.id) : undefined;
 
@@ -150,6 +152,7 @@ async function runCommand(args: Record<string, string | boolean>, positional: st
     verbose,
     pollIntervalMs,
     useWebSocket,
+    keepAwake,
     initialState: Object.keys(initialState).length > 0 ? initialState : undefined,
     hooksToken: envHooksToken,
     gatewayPort: envGatewayPort && !isNaN(envGatewayPort) ? envGatewayPort : undefined,

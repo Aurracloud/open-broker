@@ -1,5 +1,5 @@
 #!/usr/bin/env tsx
-// Search Markets - Find specific assets across all providers (perps, HIP-3, spot)
+// Search Markets - Find specific assets across all providers (perps, HIP-3, spot, HIP-4)
 
 import { getClient } from '../core/client.js';
 
@@ -85,6 +85,16 @@ function formatFunding(rate: string): string {
   return `${sign}${annualized.toFixed(2)}%`;
 }
 
+function handleMarketFetchError(kind: NonNullable<Args['type']>, error: unknown, requestedType: Args['type'], verbose?: boolean): void {
+  const message = error instanceof Error ? error.message : String(error);
+  if (requestedType === kind) {
+    throw new Error(`Failed to fetch ${kind} markets: ${message}`);
+  }
+  if (verbose) {
+    console.error(`Failed to fetch ${kind} markets:`, error);
+  }
+}
+
 async function main() {
   const args = parseArgs();
   const client = getClient();
@@ -107,6 +117,9 @@ async function main() {
     openInterest?: string;
     outcome?: number;
     outcomeSide?: string;
+    outcomeName?: string;
+    tokenName?: string;
+    parsedDescription?: Record<string, string>;
     description?: string;
   }
 
@@ -247,12 +260,15 @@ async function main() {
             volume24h: parseFloat(side.dayNtlVlm || '0'),
             outcome: market.outcome,
             outcomeSide: side.name,
+            outcomeName: market.name,
+            tokenName: side.tokenName,
+            parsedDescription: market.parsedDescription,
             description: market.description,
           });
         }
       }
     } catch (e) {
-      if (args.verbose) console.error('Failed to fetch HIP-4 outcomes:', e);
+      handleMarketFetchError('outcome', e, args.type, args.verbose);
     }
   }
 

@@ -4,7 +4,7 @@ description: Hyperliquid trading CLI skill for agents. Use when an agent needs t
 license: MIT
 compatibility: Requires Node.js 22+, network access to api.hyperliquid.xyz
 homepage: https://www.npmjs.com/package/openbroker
-metadata: {"author": "monemetrics", "version": "1.3.1"}
+metadata: {"author": "monemetrics", "version": "1.3.2"}
 allowed-tools: Bash(openbroker:*)
 ---
 
@@ -52,12 +52,15 @@ Common globals:
 openbroker search --query GOLD --json
 openbroker search --query BTC --type perp --json
 openbroker all-markets --type hip3 --json
+openbroker all-markets --type outcome --json
 openbroker outcomes --query BTC --json
 ```
 
 - HIP-3 perps use `dex:COIN`, e.g. `xyz:CL`, not bare `CL`.
 - `assetId` is the canonical identifier for comparisons and persisted agent state; order placement still uses `--coin`.
-- HIP-4 outcome orders use `--outcome <id|#encoding|+encoding>` plus `--outcome-side yes|no` when the reference is a plain ID.
+- For HIP-4 discovery, use `outcomes --json` for grouped market metadata and `all-markets --type outcome --json` for flattened side rows.
+- HIP-4 outcome orders use `--outcome <id|#encoding|+encoding>` plus `--outcome-side yes|no` when the reference is a plain ID. Encoded sides use `encoding = 10 * outcomeId + side`, where side `0` is the first side and side `1` is the second side.
+- HIP-4 order books use `#<encoding>` coins; spot balances may show `+<encoding>` token names.
 - On testnet, HIP-3 metadata may need an explicit prefixed coin such as `dex:COIN`.
 
 ## CLI command map
@@ -72,7 +75,7 @@ Most info commands accept `--json`. Use `--coin`, `--top`, and `--address` where
 | `positions` | Open perp positions and liquidation distance | `--coin`, `--address` |
 | `funding` | Funding rates | `--coin`, `--top`, `--sort annualized|hourly|oi`, `--all`, `--include-hip3` |
 | `markets` | Perp market data | `--coin`, `--top`, `--sort volume|oi|change`, `--include-hip3` |
-| `all-markets` | Browse every venue type | `--type perp|hip3|spot|outcome|all`, `--top` |
+| `all-markets` | Browse every venue type | `--type perp|hip3|spot|outcome|all`, `--top`, `--json` |
 | `search` | Find markets across providers | `--query`, `--type` |
 | `spot` | Spot markets or balances | `--coin`, `--balances`, `--address`, `--top` |
 | `fills` | Recent fills | `--coin`, `--side buy|sell`, `--top`, `--address` |
@@ -84,7 +87,7 @@ Most info commands accept `--json`. Use `--coin`, `--top`, and `--address` where
 | `trades` | Recent tape | `--coin`, `--top` |
 | `rate-limit` | API usage | — |
 | `funding-scan` | Cross-dex scan | `--threshold`, `--main-only`, `--hip3-only`, `--pairs`, `--watch`, `--interval`, `--top` |
-| `outcomes` | HIP-4 discovery/balances | `--query`, `--outcome`, `--side`, `--balances`, `--top` |
+| `outcomes` | HIP-4 discovery/balances | `--query`, `--outcome`, `--side`, `--balances`, `--top`, `--json` |
 
 ### Perp trading
 

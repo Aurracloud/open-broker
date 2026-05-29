@@ -1,5 +1,5 @@
 #!/usr/bin/env tsx
-// All Markets - View all available markets across perps, spot, and HIP-3 dexs
+// All Markets - View all available markets across perps, HIP-3, spot, and HIP-4 outcomes
 
 import { getClient } from '../core/client.js';
 
@@ -88,7 +88,20 @@ interface MarketRow {
   maxLeverage?: number;
   outcome?: number;
   outcomeSide?: string;
+  outcomeName?: string;
+  tokenName?: string;
+  parsedDescription?: Record<string, string>;
   description?: string;
+}
+
+function handleMarketFetchError(kind: NonNullable<Args['type']>, error: unknown, requestedType: Args['type'], verbose?: boolean): void {
+  const message = error instanceof Error ? error.message : String(error);
+  if (requestedType === kind) {
+    throw new Error(`Failed to fetch ${kind} markets: ${message}`);
+  }
+  if (verbose) {
+    console.error(`Failed to fetch ${kind} markets:`, error);
+  }
 }
 
 async function main() {
@@ -202,12 +215,15 @@ async function main() {
             volume24h: parseFloat(side.dayNtlVlm || '0'),
             outcome: market.outcome,
             outcomeSide: side.name,
+            outcomeName: market.name,
+            tokenName: side.tokenName,
+            parsedDescription: market.parsedDescription,
             description: market.description,
           });
         }
       }
     } catch (e) {
-      if (args.verbose) console.error('Failed to fetch HIP-4 outcomes:', e);
+      handleMarketFetchError('outcome', e, args.type, args.verbose);
     }
   }
 

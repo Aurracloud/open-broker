@@ -668,9 +668,19 @@ export class HyperliquidClient {
   private parseOutcomeDescription(description: string): Record<string, string> {
     const parsed: Record<string, string> = {};
     for (const part of description.split('|')) {
-      const idx = part.indexOf(':');
-      if (idx <= 0) continue;
-      parsed[part.slice(0, idx)] = part.slice(idx + 1);
+      const rawSegment = part.trim();
+      const metadataIdx = rawSegment.indexOf('metadata=');
+      const segments = metadataIdx >= 0
+        ? [rawSegment, rawSegment.slice(metadataIdx + 'metadata='.length)]
+        : [rawSegment];
+
+      for (const segment of segments) {
+        const idx = segment.indexOf(':');
+        if (idx <= 0) continue;
+        const key = segment.slice(0, idx).trim();
+        if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(key)) continue;
+        parsed[key] = segment.slice(idx + 1).trim();
+      }
     }
     return parsed;
   }

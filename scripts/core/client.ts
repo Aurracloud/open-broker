@@ -1978,11 +1978,27 @@ export class HyperliquidClient {
    * For unified accounts: equity comes from spotClearinghouseState (single USDC balance).
    * For standard accounts: aggregates margin summaries from each dex.
    */
+  /**
+   * Stamp a position with its canonical asset index and normalize its coin to the
+   * prefixed `{dex}:{coin}` form. The per-dex clearinghouseState may report HIP-3
+   * coins bare; we know the dex at fetch time, so we canonicalize here and look up
+   * the global index in assetMap (which is keyed by the prefixed name).
+   */
+  private stampAssetId(position: { coin: string; assetId?: number }, dexName?: string | null): void {
+    let coin = position.coin;
+    if (dexName && !coin.includes(':')) coin = `${dexName}:${coin}`;
+    position.coin = coin;
+    const idx = this.assetMap.get(coin);
+    if (idx !== undefined) position.assetId = idx;
+  }
+
   async getUserStateAll(user?: string): Promise<ClearinghouseState> {
     await this.getMetaAndAssetCtxs(); // Ensure HIP-3 dex list is loaded
 
     const unified = await this.isUnifiedAccount(user);
     const mainState = await this.getUserState(user);
+    // Stamp native positions (dexIdx 0; coins are already bare/canonical).
+    for (const ap of mainState.assetPositions ?? []) this.stampAssetId(ap.position);
 
     // Collect positions from all HIP-3 dexes (in parallel; testnet: only loaded dexes)
     const validDexs = await this.getIterableHip3Dexs();
@@ -2006,8 +2022,10 @@ export class HyperliquidClient {
         this.log(`Failed to fetch state for HIP-3 dex:`, result.reason instanceof Error ? result.reason.message : String(result.reason));
         continue;
       }
-      const { dexState } = result.value;
+      const { dex, dexState } = result.value;
       if (dexState.assetPositions?.length > 0) {
+        // Canonicalize + stamp asset index using the dex we fetched under.
+        for (const ap of dexState.assetPositions) this.stampAssetId(ap.position, dex.name);
         mainState.assetPositions.push(...dexState.assetPositions);
       }
 

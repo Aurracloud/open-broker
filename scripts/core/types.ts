@@ -173,6 +173,13 @@ export interface OutcomeMarket {
 
 export interface Position {
   coin: string;
+  /**
+   * Canonical Hyperliquid asset index (native: meta index; HIP-3:
+   * 100000 + perp_dex_index*10000 + index_in_meta). Stamped by `getUserStateAll`
+   * so consumers can key positions by a unique integer rather than the coin string
+   * (whose HIP-3 prefix may differ between endpoints). Undefined if unresolvable.
+   */
+  assetId?: number;
   szi: string; // signed size (negative = short)
   entryPx: string;
   positionValue: string;

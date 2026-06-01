@@ -2,6 +2,17 @@
 
 All notable changes to Open Broker will be documented in this file.
 
+## [1.5.0] - 2026-06-01
+
+### Added
+- **`getUserStateAll` stamps each position with its canonical asset index**
+  (`Position.assetId`) and normalizes HIP-3 coins to the prefixed `{dex}:{coin}`
+  form. The per-dex `clearinghouseState` may report HIP-3 coins bare; since we know
+  the dex at fetch time, we canonicalize and resolve the global index
+  (`100000 + perp_dex_index*10000 + index_in_meta`). Lets consumers key positions by
+  a unique integer instead of the coin string, which can otherwise mismatch between
+  endpoints (e.g. reconciling intended vs on-chain HIP-3 positions).
+
 ## [1.4.0] - 2026-05-31
 
 ### Fixed

@@ -2,6 +2,18 @@
 
 All notable changes to Open Broker will be documented in this file.
 
+## [1.4.0] - 2026-05-31
+
+### Fixed
+- **Library is now runtime-importable by external consumers.** The package entry
+  previously pointed at raw TypeScript source (`main: ./scripts/lib.ts`), so any
+  in-process consumer running outside a TS loader (or under a runner that doesn't
+  transpile `node_modules`, e.g. tsx) imported an **empty module**. Added a build
+  (`npm run build` → `tsc`) that emits compiled JS + type declarations to `dist/`,
+  and pointed `main`/`types`/`exports` at `dist/lib.js` / `dist/lib.d.ts`. The CLI
+  still runs from source via tsx; only the library entry changed. `prepublishOnly`
+  now builds before publishing. No public API changes.
+
 ## [1.3.0] - 2026-05-07
 
 ### Added

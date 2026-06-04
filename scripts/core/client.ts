@@ -2446,6 +2446,29 @@ export class HyperliquidClient {
     }
   }
 
+  /**
+   * Arm or clear Hyperliquid's dead-man's switch (`scheduleCancel`). Pass a future
+   * epoch-ms `timeMs` (the API requires ≥5s out) to schedule a cancel-ALL that fires
+   * unless re-armed; call with no argument to clear any scheduled cancel. A live quoting
+   * loop arms this on a heartbeat so a dead process or socket can't leave resting orders
+   * on the book. Account-wide (not per-coin). Returns the raw exchange ack or an err shape.
+   */
+  async scheduleCancel(timeMs?: number): Promise<{ status: string; response?: unknown }> {
+    await this.requireTrading();
+    try {
+      const params =
+        timeMs != null
+          ? ({ type: 'scheduleCancel', time: timeMs } as const)
+          : ({ type: 'scheduleCancel' } as const);
+      const response = await this.exchange.scheduleCancel(params);
+      this.log('scheduleCancel response:', JSON.stringify(response));
+      return response as unknown as { status: string; response?: unknown };
+    } catch (error) {
+      this.log('scheduleCancel error:', error);
+      return { status: 'err', response: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
   async cancelAll(coin?: string): Promise<CancelResponse[]> {
     const orders = await this.getOpenOrders();
     const results: CancelResponse[] = [];

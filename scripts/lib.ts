@@ -11,6 +11,16 @@ export {
   getClient,
 } from './core/client.js';
 
+// ── Live WebSocket user-event stream (own fills + order lifecycle) ──
+// Event-driven consumers (e.g. a market maker's hedge loop) subscribe here instead of
+// REST-polling. `userFill` / `orderUpdate` are emitted per own-order event; see WsEventMap.
+export {
+  WebSocketManager,
+  getWebSocket,
+  resetWebSocket,
+} from './core/ws.js';
+export type { WsEventMap, WsEventType, WsEventHandler } from './core/ws.js';
+
 export {
   loadConfig,
   isConfigured,

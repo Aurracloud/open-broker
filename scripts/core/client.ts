@@ -2305,6 +2305,60 @@ export class HyperliquidClient {
     }
   }
 
+  /**
+   * Place MANY orders in a SINGLE exchange request. Hyperliquid counts a bulk order/cancel as one
+   * request (weight 1 per ≤40 orders) against the address action-rate limit, so a market maker that
+   * would otherwise burn one request per quote (and exhaust `10,000 + cumulative_volume` requests)
+   * collapses N quotes into 1. Per distinct coin we run the same leverage / isolated-margin prep as
+   * `order()` (idempotent + cached) before sending. Returns the raw ack; `response.data.statuses[i]`
+   * aligns with `orders[i]`.
+   */
+  async bulkOrder(
+    orders: Array<{ coin: string; isBuy: boolean; size: number; price: number; tif?: 'Gtc' | 'Ioc' | 'Alo'; reduceOnly?: boolean; leverage?: number }>,
+    includeBuilder: boolean = true
+  ): Promise<OrderResponse> {
+    await this.requireTrading();
+    await this.getMetaAndAssetCtxs();
+    if (orders.length === 0) return { status: 'ok', response: { type: 'order', data: { statuses: [] } } } as unknown as OrderResponse;
+
+    // Per DISTINCT coin: set leverage (main perp, cross) + isolated/HIP-3 prep, exactly as order().
+    const prepped = new Set<string>();
+    for (const o of orders) {
+      if (prepped.has(o.coin)) continue;
+      prepped.add(o.coin);
+      if (o.leverage && !this.isHip3(o.coin) && this.leverageSet.get(o.coin) !== o.leverage) {
+        await this.updateLeverage(o.coin, o.leverage, true);
+      }
+      await this.ensureHip3Ready(o.coin, o.size * o.price, o.leverage);
+    }
+
+    const orderWires = orders.map((o) => {
+      const szDecimals = this.getSzDecimals(o.coin);
+      return {
+        a: this.getAssetIndex(o.coin),
+        b: o.isBuy,
+        p: roundPrice(o.price, szDecimals),
+        s: roundSize(o.size, szDecimals),
+        r: o.reduceOnly ?? false,
+        t: { limit: { tif: o.tif ?? 'Gtc' } },
+      };
+    });
+
+    const orderRequest: { orders: typeof orderWires; grouping: 'na'; builder?: BuilderInfo } = { orders: orderWires, grouping: 'na' };
+    if (includeBuilder && !this.isTestnet && this.config.builderAddress !== '0x0000000000000000000000000000000000000000') {
+      orderRequest.builder = this.builderInfo;
+    }
+
+    try {
+      const response = await this.exchange.order(orderRequest, this.vaultParam);
+      this.log('Bulk order response:', JSON.stringify(response, null, 2));
+      return response as unknown as OrderResponse;
+    } catch (error) {
+      this.log('Bulk order error:', error);
+      return { status: 'err', response: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
   async marketOrder(
     coin: string,
     isBuy: boolean,
@@ -2498,6 +2552,26 @@ export class HyperliquidClient {
         status: 'err',
         response: { type: 'cancel', data: { statuses: [error instanceof Error ? error.message : String(error)] } },
       };
+    }
+  }
+
+  /**
+   * Cancel MANY resting orders in a SINGLE exchange request (one action-rate request for ≤40 cancels),
+   * the counterpart to `bulkOrder`. `response.data.statuses[i]` aligns with `cancels[i]`.
+   */
+  async bulkCancel(cancels: Array<{ coin: string; oid: number }>): Promise<CancelResponse> {
+    await this.requireTrading();
+    await this.getMetaAndAssetCtxs();
+    if (cancels.length === 0) return { status: 'ok', response: { type: 'cancel', data: { statuses: [] } } } as unknown as CancelResponse;
+    try {
+      const response = await this.exchange.cancel({
+        cancels: cancels.map((c) => ({ a: this.getAssetIndex(c.coin), o: c.oid })),
+      }, this.vaultParam);
+      this.log('Bulk cancel response:', JSON.stringify(response, null, 2));
+      return response as unknown as CancelResponse;
+    } catch (error) {
+      this.log('Bulk cancel error:', error);
+      return { status: 'err', response: { type: 'cancel', data: { statuses: [error instanceof Error ? error.message : String(error)] } } };
     }
   }
 

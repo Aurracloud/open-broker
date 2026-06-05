@@ -12,6 +12,7 @@ import type {
   AssetMeta,
   AssetCtx,
   ClearinghouseState,
+  MarginSummary,
   OpenOrder,
   OutcomeMetaResponse,
   OutcomeMarket,
@@ -1998,13 +1999,118 @@ export class HyperliquidClient {
     if (idx !== undefined) position.assetId = idx;
   }
 
+  /**
+   * Merge per-dex clearinghouse states into ONE canonical `ClearinghouseState`: coins canonicalized to
+   * the prefixed `{dex}:{coin}` form + `assetId` stamped, and margin either aggregated across dexes
+   * (standard accounts) or derived from USDC spot equity (unified accounts). This is the single source
+   * of merge truth shared by the REST `getUserStateAll` and the WS `userStateAllFromWs` paths, so both
+   * return byte-identical shapes. `perDex` may arrive in any order; the native dex (dexName '' / null)
+   * is found and used as the margin base. Does not mutate the input summaries (clones the base).
+   */
+  private mergeUserStateAll(
+    perDex: ReadonlyArray<{ dexName: string | null; state: ClearinghouseState }>,
+    unified: boolean,
+    spotBalances?: { balances: Array<{ coin: string; total: string; hold: string }> },
+  ): ClearinghouseState {
+    const emptySummary = (): MarginSummary => ({
+      accountValue: '0', totalNtlPos: '0', totalRawUsd: '0', totalMarginUsed: '0', withdrawable: '0',
+    });
+    const base = perDex.find((d) => !d.dexName) ?? perDex[0];
+    const result: ClearinghouseState = {
+      assetPositions: [],
+      marginSummary: { ...(base?.state.marginSummary ?? emptySummary()) },
+      crossMarginSummary: { ...(base?.state.crossMarginSummary ?? emptySummary()) },
+      crossMaintenanceMarginUsed: base?.state.crossMaintenanceMarginUsed ?? '0',
+    };
+
+    const safeAdd = (a: string | undefined, b: string | undefined): string =>
+      String((parseFloat(a ?? '0') || 0) + (parseFloat(b ?? '0') || 0));
+    const addToSummary = (summary: MarginSummary, m: MarginSummary) => {
+      summary.accountValue = safeAdd(summary.accountValue, m.accountValue);
+      summary.totalNtlPos = safeAdd(summary.totalNtlPos, m.totalNtlPos);
+      summary.totalRawUsd = safeAdd(summary.totalRawUsd, m.totalRawUsd);
+      summary.totalMarginUsed = safeAdd(summary.totalMarginUsed, m.totalMarginUsed);
+      summary.withdrawable = safeAdd(summary.withdrawable, m.withdrawable);
+    };
+
+    for (const { dexName, state } of perDex) {
+      for (const ap of state.assetPositions ?? []) {
+        // Native coins are bare/canonical (dexName falsy → no prefix); HIP-3 coins get prefixed.
+        // stampAssetId is idempotent (guards on an existing ':') so re-merging a cached WS event is safe.
+        this.stampAssetId(ap.position, dexName ?? undefined);
+        result.assetPositions.push(ap);
+      }
+      // Standard accounts: aggregate each NON-base (HIP-3) dex's margin onto the base.
+      if (!unified && dexName && state.marginSummary) {
+        addToSummary(result.marginSummary, state.marginSummary);
+        addToSummary(result.crossMarginSummary, state.marginSummary);
+      }
+    }
+
+    // Unified accounts: equity is the USDC spot balance, margin/notional summed from the positions.
+    if (unified && spotBalances) {
+      const usdc = (spotBalances.balances ?? []).find((b) => b.coin?.toUpperCase() === 'USDC');
+      if (usdc) {
+        const totalUsdc = usdc.total;
+        const withdrawable = String(parseFloat(totalUsdc) - parseFloat(usdc.hold));
+        let totalMarginUsed = 0;
+        let totalNtlPos = 0;
+        for (const ap of result.assetPositions) {
+          const pos = ap.position;
+          if (parseFloat(pos.szi) === 0) continue;
+          totalMarginUsed += parseFloat(pos.marginUsed);
+          totalNtlPos += Math.abs(parseFloat(pos.positionValue));
+        }
+        const summary: MarginSummary = {
+          accountValue: totalUsdc,
+          totalNtlPos: String(totalNtlPos),
+          totalRawUsd: totalUsdc,
+          totalMarginUsed: String(totalMarginUsed),
+          withdrawable,
+        };
+        result.marginSummary = summary;
+        result.crossMarginSummary = { ...summary };
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * Reconstruct the canonical merged `ClearinghouseState` from a WS `allDexsClearinghouseState` event
+   * (and, for unified accounts, a WS `spotState` balances list) — the zero-REST equivalent of
+   * `getUserStateAll()`. Requires the asset maps to be warmed (a `getMetaAndAssetCtxs()` at startup
+   * does this); falls back to bare coins for any asset not yet in the map (still canonicalized by dex).
+   */
+  userStateAllFromWs(
+    clearinghouseStates: ReadonlyArray<[string, ClearinghouseState & { withdrawable?: string }]>,
+    unified: boolean,
+    spotBalances?: { balances: Array<{ coin: string; total: string; hold: string }> },
+  ): ClearinghouseState {
+    const perDex = clearinghouseStates.map(([dexName, raw]) => {
+      // The WS state has `withdrawable` at the top level; fold it into marginSummary (the shape REST
+      // getUserState returns and the merge / collateral gate read). Clone so the cached event is untouched.
+      const w = raw.withdrawable;
+      const state: ClearinghouseState = {
+        ...raw,
+        marginSummary: raw.marginSummary && w != null ? { ...raw.marginSummary, withdrawable: w } : raw.marginSummary,
+        crossMarginSummary: raw.crossMarginSummary && w != null ? { ...raw.crossMarginSummary, withdrawable: w } : raw.crossMarginSummary,
+      };
+      return { dexName: dexName || null, state };
+    });
+    return this.mergeUserStateAll(perDex, unified, spotBalances);
+  }
+
+  /**
+   * Get user state across all dexes (main + HIP-3) over REST.
+   * For unified accounts: equity comes from spotClearinghouseState (single USDC balance).
+   * For standard accounts: aggregates margin summaries from each dex.
+   */
   async getUserStateAll(user?: string): Promise<ClearinghouseState> {
     await this.getMetaAndAssetCtxs(); // Ensure HIP-3 dex list is loaded
 
     const unified = await this.isUnifiedAccount(user);
     const mainState = await this.getUserState(user);
-    // Stamp native positions (dexIdx 0; coins are already bare/canonical).
-    for (const ap of mainState.assetPositions ?? []) this.stampAssetId(ap.position);
 
     // Collect positions from all HIP-3 dexes (in parallel; testnet: only loaded dexes)
     const validDexs = await this.getIterableHip3Dexs();
@@ -2015,92 +2121,31 @@ export class HyperliquidClient {
       })
     );
 
+    const perDex: Array<{ dexName: string | null; state: ClearinghouseState }> = [{ dexName: '', state: mainState }];
     let hip3Errors = 0;
-    const safeAdd = (a: string | undefined, b: string | undefined): string => {
-      const va = parseFloat(a ?? '0') || 0;
-      const vb = parseFloat(b ?? '0') || 0;
-      return String(va + vb);
-    };
-
     for (const result of dexResults) {
       if (result.status === 'rejected') {
         hip3Errors++;
         this.log(`Failed to fetch state for HIP-3 dex:`, result.reason instanceof Error ? result.reason.message : String(result.reason));
         continue;
       }
-      const { dex, dexState } = result.value;
-      if (dexState.assetPositions?.length > 0) {
-        // Canonicalize + stamp asset index using the dex we fetched under.
-        for (const ap of dexState.assetPositions) this.stampAssetId(ap.position, dex.name);
-        mainState.assetPositions.push(...dexState.assetPositions);
-      }
-
-      // For standard accounts, aggregate margin from each dex
-      if (!unified) {
-        const dexMargin = dexState.marginSummary;
-        if (dexMargin) {
-          const addToSummary = (summary: { accountValue: string; totalNtlPos: string; totalRawUsd: string; totalMarginUsed: string; withdrawable: string }) => {
-            summary.accountValue = safeAdd(summary.accountValue, dexMargin.accountValue);
-            summary.totalNtlPos = safeAdd(summary.totalNtlPos, dexMargin.totalNtlPos);
-            summary.totalRawUsd = safeAdd(summary.totalRawUsd, dexMargin.totalRawUsd);
-            summary.totalMarginUsed = safeAdd(summary.totalMarginUsed, dexMargin.totalMarginUsed);
-            summary.withdrawable = safeAdd(summary.withdrawable, dexMargin.withdrawable);
-          };
-          addToSummary(mainState.marginSummary);
-          addToSummary(mainState.crossMarginSummary);
-        }
-      }
+      perDex.push({ dexName: result.value.dex.name, state: result.value.dexState });
     }
-
     if (hip3Errors > 0) {
       this.log(`Warning: ${hip3Errors} HIP-3 dex queries failed — some positions may be missing. Use --verbose for details.`);
     }
 
-    // For unified accounts: equity is the USDC balance from spot clearinghouse
+    let spotBalances: { balances: Array<{ coin: string; total: string; hold: string }> } | undefined;
     if (unified) {
       try {
-        const spotState = await this.getSpotBalances(user);
-        this.log('Unified spot balances:', JSON.stringify(spotState));
-
-        // Find USDC balance (case-insensitive, handles variations)
-        const balances = spotState?.balances ?? [];
-        const usdcBalance = balances.find(b => b.coin?.toUpperCase() === 'USDC');
-
-        if (usdcBalance) {
-          const totalUsdc = usdcBalance.total;
-          const holdUsdc = usdcBalance.hold;
-          const withdrawable = String(parseFloat(totalUsdc) - parseFloat(holdUsdc));
-
-          // Compute total margin used and notional from all positions
-          let totalMarginUsed = 0;
-          let totalNtlPos = 0;
-          for (const ap of mainState.assetPositions) {
-            const pos = ap.position;
-            if (parseFloat(pos.szi) === 0) continue;
-            totalMarginUsed += parseFloat(pos.marginUsed);
-            totalNtlPos += Math.abs(parseFloat(pos.positionValue));
-          }
-
-          const summary = {
-            accountValue: totalUsdc,
-            totalNtlPos: String(totalNtlPos),
-            totalRawUsd: totalUsdc,
-            totalMarginUsed: String(totalMarginUsed),
-            withdrawable,
-          };
-          mainState.marginSummary = summary;
-          mainState.crossMarginSummary = { ...summary };
-
-          this.log(`Unified account: USDC balance $${parseFloat(totalUsdc).toFixed(2)}, margin used $${totalMarginUsed.toFixed(2)}`);
-        } else {
-          this.log('Unified account: no USDC balance found in spot state. Balances:', balances.map(b => b.coin));
-        }
+        spotBalances = await this.getSpotBalances(user);
+        this.log('Unified spot balances:', JSON.stringify(spotBalances));
       } catch (err) {
         this.log('Failed to fetch spot balances for unified account:', err instanceof Error ? err.message : String(err));
       }
     }
 
-    return mainState;
+    return this.mergeUserStateAll(perDex, unified, spotBalances);
   }
 
   async getOpenOrders(user?: string): Promise<OpenOrder[]> {

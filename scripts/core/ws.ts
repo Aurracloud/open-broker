@@ -9,7 +9,11 @@ import type {
   OrderUpdatesWsEvent,
   UserFillsWsEvent,
   UserEventsWsEvent,
+  AllDexsAssetCtxsWsEvent,
+  AllDexsClearinghouseStateWsEvent,
+  SpotStateWsEvent,
 } from '@nktkas/hyperliquid';
+import type { ClearinghouseState } from './types.js';
 import { isMainnet } from './config.js';
 
 // ── Event types ────────────────────────────────────────────────────
@@ -26,6 +30,47 @@ export interface WsEventMap {
   };
   /** Mid prices for all assets updated */
   allMids: { mids: Record<string, string> };
+  /**
+   * Asset contexts (funding / mark / oracle / OI / premium / impact) for EVERY dex — native and all
+   * HIP-3 deployers — in a single push. `ctxs` is `[dexName, ctx[]]` tuples; `ctx[i]` aligns
+   * positionally with that dex's `meta.universe[i]` (same join as the REST `metaAndAssetCtxs`), so a
+   * consumer must hold the static universe to map index → coin. Lets a consumer drop the weight-20
+   * per-dex `metaAndAssetCtxs` REST poll entirely. Fields typed are the ones we read; the SDK emits a
+   * structurally-assignable superset.
+   */
+  allDexsAssetCtxs: {
+    ctxs: Array<[
+      string,
+      Array<{
+        funding: string;
+        openInterest: string;
+        dayNtlVlm: string;
+        premium: string | null;
+        oraclePx: string;
+        markPx: string;
+        midPx?: string | null;
+        prevDayPx?: string;
+        impactPxs?: readonly string[] | null;
+      }>,
+    ]>;
+  };
+  /**
+   * Clearinghouse state (positions + margin) for EVERY dex for one user, in a single push — the WS
+   * equivalent of `getUserStateAll`'s inputs. `clearinghouseStates` is `[dexName, state]` tuples
+   * (dexName '' = native/main). Feed it to `client.userStateAllFromWs(...)` to get the same merged,
+   * coin-canonicalized `ClearinghouseState` the REST path returns, with no REST weight.
+   */
+  allDexsClearinghouseState: {
+    user: string;
+    // Each per-dex state carries `withdrawable` at the TOP level (not inside marginSummary), like the
+    // raw SDK clearinghouseState; `userStateAllFromWs` folds it into marginSummary.withdrawable to
+    // match the REST getUserState shape.
+    clearinghouseStates: Array<[string, ClearinghouseState & { withdrawable?: string }]>;
+  };
+  /** User spot balances (the shared collateral pool for unified accounts). */
+  spotState: {
+    balances: Array<{ coin: string; token: number; total: string; hold: string; entryNtl?: string }>;
+  };
   /** Order status changed (filled, canceled, rejected, etc.) */
   orderUpdate: {
     order: {
@@ -215,7 +260,46 @@ export class WebSocketManager {
     return this.trackSub(sub);
   }
 
+  /**
+   * Subscribe to asset contexts for ALL dexes (native + every HIP-3 deployer) in one stream. Replaces
+   * the weight-20-per-dex `metaAndAssetCtxs` REST poll for the dynamic ctx fields (funding/mark/oracle/
+   * OI/premium/impact). The static universe (coin name / szDecimals / maxLeverage) is NOT in this
+   * stream — keep refreshing that on a slow cadence and join positionally.
+   */
+  async subscribeAllDexsAssetCtxs(): Promise<ISubscription> {
+    const client = this.ensureClient();
+    const sub = await client.allDexsAssetCtxs((data: AllDexsAssetCtxsWsEvent) => {
+      this.emit('allDexsAssetCtxs', data as WsEventMap['allDexsAssetCtxs']);
+    });
+    return this.trackSub(sub);
+  }
+
   // ── User subscriptions ────────────────────────────────────────
+
+  /**
+   * Subscribe to clearinghouse state (positions + margin) across ALL dexes for a user, in one stream.
+   * Replaces per-cycle `getUserStateAll` REST polling. Pair the emitted event with
+   * `client.userStateAllFromWs(...)` to reconstruct the merged, coin-canonicalized state.
+   */
+  async subscribeAllDexsClearinghouseState(user: `0x${string}`): Promise<ISubscription> {
+    const client = this.ensureClient();
+    const sub = await client.allDexsClearinghouseState({ user }, (data: AllDexsClearinghouseStateWsEvent) => {
+      this.emit('allDexsClearinghouseState', data as unknown as WsEventMap['allDexsClearinghouseState']);
+    });
+    return this.trackSub(sub);
+  }
+
+  /**
+   * Subscribe to a user's spot balances (the unified-account collateral pool). Replaces
+   * `getSpotBalances` REST polling in the collateral gate.
+   */
+  async subscribeSpotState(user: `0x${string}`): Promise<ISubscription> {
+    const client = this.ensureClient();
+    const sub = await client.spotState({ user }, (data: SpotStateWsEvent) => {
+      this.emit('spotState', data as unknown as WsEventMap['spotState']);
+    });
+    return this.trackSub(sub);
+  }
 
   /**
    * Subscribe to order lifecycle events (fill, cancel, reject, etc.).

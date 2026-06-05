@@ -296,7 +296,10 @@ export class WebSocketManager {
   async subscribeSpotState(user: `0x${string}`): Promise<ISubscription> {
     const client = this.ensureClient();
     const sub = await client.spotState({ user }, (data: SpotStateWsEvent) => {
-      this.emit('spotState', data as unknown as WsEventMap['spotState']);
+      // The SDK event nests balances under `spotState` ({ user, spotState: { balances } }); flatten to
+      // the same `{ balances }` shape the REST getSpotBalances returns so consumers are uniform.
+      const balances = (data as { spotState?: { balances?: WsEventMap['spotState']['balances'] } }).spotState?.balances ?? [];
+      this.emit('spotState', { balances });
     });
     return this.trackSub(sub);
   }

@@ -55,6 +55,20 @@ export interface WsEventMap {
     feeToken: string;
     oid: number;
     crossed: boolean;
+    /** Frontend-display direction, e.g. "Open Long" / "Close Short" / "Buy". Distinguishes opens from closes. */
+    dir: string;
+    /** Signed position size BEFORE this fill — lets a consumer tell a reduce/close from an open. */
+    startPosition: string;
+    /**
+     * Present only when this fill was a forced liquidation (otherwise undefined). A consumer that
+     * hedges its own fills MUST branch on this: a liquidation force-closes the leg, so the correct
+     * response is to flatten the opposite hedge, NOT to place a new same-size hedge.
+     */
+    liquidation?: {
+      liquidatedUser: string;
+      markPx: string;
+      method: 'market' | 'backstop';
+    };
   };
   /** User event (fills, funding, liquidation, non-user cancels) */
   userEvent: UserEventsWsEvent;
@@ -250,6 +264,9 @@ export class WebSocketManager {
           feeToken: fill.feeToken,
           oid: fill.oid,
           crossed: fill.crossed,
+          dir: fill.dir,
+          startPosition: fill.startPosition,
+          liquidation: fill.liquidation,
         });
       }
     });

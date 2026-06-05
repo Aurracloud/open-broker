@@ -44,6 +44,12 @@ export class HyperliquidClient {
   private hip3IsolatedSet: Set<string> = new Set();
   /** Cached maxLeverage for HIP-3 assets */
   private hip3MaxLeverageMap: Map<string, number> = new Map();
+  /**
+   * Leverage we last SET per coin this session (the clamped value sent to the venue). Lets the
+   * order path skip a redundant updateLeverage and, crucially, NOT clobber a leverage already set
+   * out-of-band (e.g. a startup arming) back up to the asset max on a leverage-less order.
+   */
+  private leverageSet: Map<string, number> = new Map();
   /** Cached account abstraction mode: 'standard' | 'unified' | 'portfolio' | 'dexAbstraction' */
   private accountMode: string | null = null;
   /** Spot asset index map: coin name → 10000 + spotMeta.universe[i].index */
@@ -2145,12 +2151,15 @@ export class HyperliquidClient {
     const maxLev = this.hip3MaxLeverageMap.get(coin) ?? 10;
     const effectiveLev = Math.min(leverage ?? maxLev, maxLev);
 
-    // Set isolated margin on first order per asset, or when leverage changes
-    if (!this.hip3IsolatedSet.has(coin) || leverage) {
+    // Set isolated margin + leverage only when something must actually change: the asset hasn't
+    // been isolated-set yet, OR an explicit leverage was passed that differs from what we last set.
+    // This stops a leverage-LESS order from clobbering a leverage set out-of-band (e.g. a startup
+    // armLeverage) back up to maxLev, and avoids a redundant updateLeverage on every requote.
+    const needsSet = !this.hip3IsolatedSet.has(coin) || (leverage != null && this.leverageSet.get(coin) !== effectiveLev);
+    if (needsSet) {
       this.log(`HIP-3 asset ${coin} (dex: ${dexInfo.dexName}) — setting isolated margin at ${effectiveLev}x`);
       try {
-        await this.updateLeverage(coin, effectiveLev, false); // false = isolated
-        this.hip3IsolatedSet.add(coin);
+        await this.updateLeverage(coin, effectiveLev, false); // false = isolated; records leverageSet + isolatedSet
       } catch (err) {
         this.log(`Failed to set isolated margin for ${coin}:`, err instanceof Error ? err.message : String(err));
         this.hip3IsolatedSet.add(coin);
@@ -2198,8 +2207,9 @@ export class HyperliquidClient {
     await this.requireTrading();
     await this.getMetaAndAssetCtxs();
 
-    // Set leverage if specified (for main perps, cross margin; for HIP-3, handled in ensureHip3Ready)
-    if (leverage && !this.isHip3(coin)) {
+    // Set leverage if specified (for main perps, cross margin; for HIP-3, handled in ensureHip3Ready).
+    // Skip when it already matches what we last set — avoids a redundant updateLeverage per order.
+    if (leverage && !this.isHip3(coin) && this.leverageSet.get(coin) !== leverage) {
       this.log(`Setting leverage for ${coin} to ${leverage}x cross`);
       await this.updateLeverage(coin, leverage, true);
     }
@@ -2822,6 +2832,11 @@ export class HyperliquidClient {
         leverage,
       }, this.vaultParam);
       this.log('Leverage response:', JSON.stringify(response, null, 2));
+      // Remember what we set so the order path is idempotent and won't re-initialize this coin's
+      // leverage (e.g. ensureHip3Ready defaulting to maxLev on a leverage-less order). `leverage`
+      // here is already clamped; for HIP-3 isCross was forced false above (isolated).
+      this.leverageSet.set(coin, leverage);
+      if (this.isHip3(coin)) this.hip3IsolatedSet.add(coin);
       return response;
     } catch (error) {
       this.log('Leverage error:', error);

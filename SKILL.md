@@ -1,29 +1,40 @@
 ---
 name: openbroker
-description: Hyperliquid trading CLI skill for agents. Use when an agent needs to inspect markets/accounts, place or manage perp/spot/HIP-4 orders, or write and run Hyperliquid trading automations directly through the `openbroker` CLI without requiring the OpenClaw plugin.
-license: MIT
-compatibility: Requires Node.js 22+, network access to api.hyperliquid.xyz
-homepage: https://www.npmjs.com/package/openbroker
-metadata: {"author": "monemetrics", "version": "1.3.2"}
-allowed-tools: Bash(openbroker:*)
+description: Operate the OpenBroker Hyperliquid CLI for market and account inspection, perp/HIP-3/spot/HIP-4 trading, order management, and TypeScript automations. Use when Codex needs to run or explain `openbroker` commands, inspect Hyperliquid state, safely preview or execute trades, or create and debug OpenBroker automations.
 ---
 
 # OpenBroker — Hyperliquid CLI skill
 
-OpenBroker is first a CLI. The OpenClaw plugin is optional: use `ob_*` tools when present for common structured calls, but keep the CLI model in mind because it is the complete surface area and the safest fallback.
+Use the `openbroker` CLI as the canonical interface. Prefer structured JSON output for inspection and dry runs before live writes.
 
 ## Operating rules
 
 - For unfamiliar assets, **search before trading**. Hyperliquid has main perps, HIP-3 perps, spot markets, and HIP-4 outcomes that can share names.
 - Prefer `--json` for machine-readable info commands.
-- Before any write, verify the asset, account, open positions/orders, size, and whether the action should be reduce-only.
-- For new or changed trading logic, start with `--dry`, inspect the plan/audit trail, then go live only when that matches the user’s intent.
+- Before any write, verify the network, trading account, asset, side, size, open positions/orders, and whether the action should be reduce-only.
+- Use `--dry` for proposed trades and new or changed trading logic. Execute live only when the user explicitly requests live execution and the dry-run plan matches that intent.
+- Never infer a live trade size, switch to mainnet, or create/import/export a wallet without explicit user direction.
+- Never print, echo, log, or expose private keys or seed material. Refer only to the configured signing wallet address when diagnosing identity.
 - Treat CLI output as exchange state, not just prose: parse order IDs, balances, fills, and errors instead of assuming success.
 
 ## Setup and identity
 
+First check whether the CLI is installed and current:
+
 ```bash
-npm install -g openbroker
+command -v openbroker
+openbroker --version
+```
+
+Require OpenBroker 1.9.0 or newer. If it is missing or outdated, ask before installing or upgrading it:
+
+```bash
+npm install -g openbroker@latest
+```
+
+Public market-data commands such as `search`, `markets`, `funding`, `candles`, and `trades` work without wallet setup. Only run setup when the user wants account-specific reads or trading:
+
+```bash
 openbroker setup
 openbroker account --json
 ```
@@ -190,7 +201,6 @@ Bundled examples are **references, not production strategies**. Read them for AP
 - `api.on(...)`, `api.every(...)`, `api.onStart(...)`, `api.onStop(...)`, `api.onError(...)`.
 - `api.state` — persisted state; survives restarts.
 - `api.audit.record(...)` / `api.audit.metric(...)` — durable observability.
-- `api.publish(...)` — notify an OpenClaw agent when hooks are configured.
 - `api.dryRun` — whether writes are intercepted.
 
 Core events include `tick`, `price_change`, `funding_update`, `position_opened`, `position_closed`, `position_changed`, `pnl_threshold`, `margin_warning`, `order_filled`, `order_update`, and `liquidation`.
@@ -223,7 +233,7 @@ These matter more than boilerplate:
 7. **Separate strategy logic from execution policy.** Maker-first execution can reduce fees, but it needs bounded retries, post-only rejection handling, order cancellation, partial-fill accounting, minimum trade thresholds, and a defined IOC fallback. Measure progress from refreshed balances/positions, not only from submit responses.
 8. **Size from real NAV and hard caps.** Multi-leg strategies often need spot balances, spot USDC, and perp account value combined; a 50/50 carry target derived from total NAV must then be halved per side and still respect a hard per-side cap.
 9. **Define stop behavior intentionally.** On shutdown, always handle working orders, but do not blindly flatten every strategy. A hedged carry may need “preserve hedge and alert,” while a transient execution bot may need “cancel and flatten.”
-10. **Instrument first-class decisions.** Log and audit funding source, targets, leg notionals, settlement distance, hold/close decisions, fills, retries, and error paths. If using the plugin, publish events that need human attention.
+10. **Instrument first-class decisions.** Log and audit funding source, targets, leg notionals, settlement distance, hold/close decisions, fills, retries, and error paths. Surface events that need human attention through the configured monitoring path.
 
 Additional practical caveats:
 
@@ -234,34 +244,10 @@ Additional practical caveats:
 - Naked directional positions usually need explicit TP/SL or equivalent risk logic. Hedged multi-leg strategies need strategy-specific exits instead of cargo-cult TP/SL rules.
 - For new automations, do a dry run, inspect `auto report`, and only then run live unless the user explicitly requested immediate live execution.
 
-## Plugin-aware use
-
-When the OpenClaw plugin is available:
-
-- Prefer `ob_*` tools for common structured reads and simple writes.
-- Use `ob_watcher_status` for background monitoring state.
-- Use `ob_auto_run`, `ob_auto_stop`, and `ob_auto_list` for supported automation actions.
-- Fall back to the CLI for unsupported commands, debugging, richer flags, or if a tool returns empty/unexpected data.
-
-Representative mappings:
-
-| Plugin tool | CLI equivalent |
-|---|---|
-| `ob_account` | `openbroker account --json` |
-| `ob_positions` | `openbroker positions --json` |
-| `ob_funding` | `openbroker funding --json --include-hip3` |
-| `ob_search` | `openbroker search --query <QUERY> --json` |
-| `ob_buy` / `ob_sell` | `openbroker buy|sell --coin <COIN> --size <SIZE>` |
-| `ob_limit` | `openbroker limit ...` |
-| `ob_tpsl` | `openbroker tpsl ...` |
-| `ob_auto_run` | `openbroker auto run <script> ...` |
-
-Skill-only mode is fully usable through the CLI; the plugin adds agent tools, watcher notifications, and OpenClaw webhook integration.
-
 ## Failure checks
 
 - `No market data found` → search again; likely wrong venue prefix.
 - `$0` equity on an API wallet → likely missing `HYPERLIQUID_ACCOUNT_ADDRESS`.
 - Unexpected funding behavior → check whether you are reading predicted vs cached instantaneous data.
 - Strategy churn → inspect confirmation loops, fee-aware hold logic, settlement guards, and min-trade thresholds before changing position size.
-- Tool failure in plugin mode → rerun the equivalent CLI command with `--json` and `--verbose` if needed.
+- Unexpected or empty CLI output → rerun the command with `--json` and `--verbose`, then inspect the returned error before retrying a write.

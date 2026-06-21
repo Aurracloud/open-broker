@@ -1,0 +1,7 @@
+interface:
+  display_name: "OpenBroker"
+  short_description: "Trade and automate Hyperliquid from Codex"
+  default_prompt: "Use $openbroker to inspect Hyperliquid markets or my account and recommend the safest next action."
+
+policy:
+  allow_implicit_invocation: false

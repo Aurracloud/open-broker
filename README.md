@@ -11,10 +11,10 @@ npm install -g openbroker
 ## Quick Start
 
 ```bash
-# 1. Setup (generates wallet, creates config, approves builder fee)
-openbroker setup
+# 1. Setup a restricted API wallet (recommended for agents)
+openbroker setup --api-wallet
 
-# 2. Fund your wallet with USDC on Arbitrum, then deposit at https://app.hyperliquid.xyz/
+# 2. Open the printed approval link and connect your funded master Hyperliquid wallet
 
 # 3. Start trading
 openbroker account                          # View account info
@@ -27,18 +27,19 @@ openbroker search --query GOLD              # Find markets
 ### Setup
 
 ```bash
-openbroker setup                # One-command setup (wallet + config + builder approval)
+openbroker setup --api-wallet   # Recommended: restricted agent wallet + browser approval
+openbroker setup                # Interactive; API wallet is the default
 ```
 
 The setup command handles everything automatically:
-- Generates a fresh trading wallet (recommended for agents) or accepts your existing private key
+- Generates a restricted API wallet by default, or accepts another wallet mode interactively
 - Saves configuration to `~/.openbroker/.env` (permissions `0600`)
-- Approves the builder fee (required for trading)
+- Prints a browser approval link and waits for master-wallet authorization
 
 Setup offers three modes:
-1. **Generate fresh wallet** (recommended for agents) — cleanest option, no browser steps
+1. **Generate fresh wallet** — separately funded wallet, no browser steps
 2. **Import existing key** — use a key you already have
-3. **Generate API wallet** — restricted wallet requiring browser approval from a master wallet
+3. **Generate API wallet** (default and recommended for agents) — can trade but cannot withdraw; requires browser approval from a master wallet
 
 ---
 
@@ -717,24 +718,23 @@ export HYPERLIQUID_NETWORK=mainnet       # Optional: mainnet (default) or testne
 export HYPERLIQUID_ACCOUNT_ADDRESS=0x... # Optional: for API wallets
 ```
 
-### Fresh Wallet Setup (Recommended for Agents)
+### API Wallet Setup (Recommended for Agents)
 
-The simplest setup for agents — generates a dedicated wallet, auto-approves the builder fee, and is ready to trade after funding:
-
-```bash
-openbroker setup    # Choose option 1, fund with USDC, start trading
-```
-
-### API Wallet Setup (Alternative)
-
-For delegated trading without moving funds, use an API wallet:
+The safest default for agents delegates trading from an API wallet that cannot withdraw. The CLI prints an approval URL, waits for the funded master wallet to authorize it, and then saves the master account mapping automatically:
 
 ```bash
-export HYPERLIQUID_PRIVATE_KEY="0x..."        # API wallet private key
-export HYPERLIQUID_ACCOUNT_ADDRESS="0x..."    # Main account address
+openbroker setup --api-wallet
 ```
 
-**Note:** API wallets require browser approval from the master wallet. The master wallet signs `ApproveAgent` and `ApproveBuilderFee` transactions via the approval URL provided during setup.
+Open the printed `https://openbroker.dev/approve?agent=...` link, connect the intended master Hyperliquid wallet, and approve `ApproveAgent` plus the 1 bps `ApproveBuilderFee` transaction. If approval times out, rerun the same command; OpenBroker resumes the incomplete setup without generating a new key.
+
+### Fresh Wallet Setup (Alternative)
+
+Run interactive setup and explicitly choose option 1 to create a separately funded wallet:
+
+```bash
+openbroker setup
+```
 
 ## Builder Fee
 

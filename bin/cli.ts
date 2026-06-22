@@ -136,7 +136,7 @@ Utility:
   approve-builder      Check or retry builder fee approval
 
 Examples:
-  openbroker setup                              # First-time setup (does everything)
+  openbroker setup --api-wallet                 # Recommended restricted API-wallet setup
   openbroker account                            # View account info
   openbroker buy --coin ETH --size 0.1          # Market buy 0.1 ETH
   openbroker limit --coin BTC --side buy --size 0.01 --price 60000

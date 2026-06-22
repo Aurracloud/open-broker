@@ -18,6 +18,7 @@ const GLOBAL_CONFIG_PATH = path.join(GLOBAL_CONFIG_DIR, '.env');
 // Parse CLI flags
 const cliArgs = process.argv.slice(2);
 const useTestnet = cliArgs.includes('--testnet') || ENV_TESTNET;
+const useApiWallet = cliArgs.includes('--api-wallet');
 const accountAddressIdx = cliArgs.indexOf('--account-address');
 const cliAccountAddress = accountAddressIdx !== -1 ? cliArgs[accountAddressIdx + 1] : undefined;
 const configPathIdx = cliArgs.indexOf('-c') !== -1 ? cliArgs.indexOf('-c') : cliArgs.indexOf('--config');
@@ -257,11 +258,13 @@ Usage: openbroker setup [options]
 Options:
   -c, --config <path>       Save config to a custom path (default: ~/.openbroker/.env)
   --testnet                 Configure for testnet
+  --api-wallet              Generate a restricted API wallet and skip the wallet menu
   --account-address <addr>  Set HYPERLIQUID_ACCOUNT_ADDRESS (for API wallet / vault trading)
   --help                    Show this help
 
 Examples:
-  openbroker setup                                                    # Interactive → ~/.openbroker/.env
+  openbroker setup                                                    # Interactive; API wallet is the default
+  openbroker setup --api-wallet                                       # Recommended agent setup
   openbroker setup -c .env --testnet                                  # Write to ./.env for testnet
   openbroker setup -c ./testnet.env --testnet --account-address 0x... # API wallet config
 `);
@@ -358,23 +361,29 @@ Examples:
     };
   }
 
+  // Agent-friendly non-interactive selection. Browser approval is still
+  // deliberately completed by the human who controls the master wallet.
+  if (useApiWallet) {
+    return setupApiWallet();
+  }
+
   // Ask user which setup mode
   const rl = createReadline();
 
   console.log('Step 1/3: Wallet Setup');
   console.log('----------------------');
   console.log('How would you like to set up your wallet?\n');
-  console.log('  1) Generate a fresh wallet (recommended for agents)');
-  console.log('     Creates a dedicated trading wallet. Builder fee is auto-approved.');
-  console.log('     Just fund it with USDC and start trading — no browser steps needed.');
+  console.log('  1) Generate a fresh wallet');
+  console.log('     Creates a dedicated funded wallet. Builder fee is auto-approved.');
   console.log('');
   console.log('  2) Import existing private key');
-  console.log('  3) Generate API wallet (restricted, requires browser approval)');
+  console.log('  3) Generate API wallet (recommended for agents)');
   console.log('     Can trade but cannot withdraw. Requires master wallet approval in browser.\n');
 
   let choice = '';
   while (choice !== '1' && choice !== '2' && choice !== '3') {
-    choice = await prompt(rl, 'Enter choice (1, 2, or 3): ');
+    const input = await prompt(rl, 'Enter choice (1, 2, or 3) [3]: ');
+    choice = input || '3';
     if (choice !== '1' && choice !== '2' && choice !== '3') {
       console.log('Please enter 1, 2, or 3');
     }

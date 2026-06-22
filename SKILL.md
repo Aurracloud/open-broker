@@ -1,6 +1,6 @@
 ---
 name: openbroker
-description: Operate the OpenBroker Hyperliquid CLI for market and account inspection, perp/HIP-3/spot/HIP-4 trading, order management, and TypeScript automations. Use when Codex needs to run or explain `openbroker` commands, inspect Hyperliquid state, safely preview or execute trades, or create and debug OpenBroker automations.
+description: Install, onboard, and operate the OpenBroker Hyperliquid CLI for market and account inspection, restricted API-wallet setup, perp/HIP-3/spot/HIP-4 trading, order management, and TypeScript automations. Use when Codex needs to set up OpenBroker, run or explain `openbroker` commands, inspect Hyperliquid state, safely preview or execute trades, or create and debug OpenBroker automations.
 ---
 
 # OpenBroker — Hyperliquid CLI skill
@@ -17,33 +17,50 @@ Use the `openbroker` CLI as the canonical interface. Prefer structured JSON outp
 - Never print, echo, log, or expose private keys or seed material. Refer only to the configured signing wallet address when diagnosing identity.
 - Treat CLI output as exchange state, not just prose: parse order IDs, balances, fills, and errors instead of assuming success.
 
-## Setup and identity
+## First-run installation and API-wallet onboarding
 
-First check whether the CLI is installed and current:
+Use the following flow when the user asks to install, set up, or use OpenBroker. Do not ask the user for a private key.
+
+First check whether Node.js 22+ and the CLI are installed:
 
 ```bash
+node --version
 command -v openbroker
 openbroker --version
 ```
 
-Require OpenBroker 1.9.0 or newer. If it is missing or outdated, ask before installing or upgrading it:
+Require OpenBroker 1.9.1 or newer. When the user explicitly asks to set up OpenBroker, install or upgrade the CLI as part of that request, using the normal approval flow for global or network writes:
 
 ```bash
 npm install -g openbroker@latest
 ```
 
-Public market-data commands such as `search`, `markets`, `funding`, `candles`, and `trades` work without wallet setup. Only run setup when the user wants account-specific reads or trading:
+Public market-data commands such as `search`, `markets`, `funding`, `candles`, and `trades` work without wallet setup. For account-specific reads or trading, prefer a restricted API wallet because it can trade on the user's master Hyperliquid account but cannot withdraw funds.
+
+Run setup in an interactive terminal session and select the API-wallet flow directly:
 
 ```bash
-openbroker setup
-openbroker account --json
+openbroker setup --api-wallet
 ```
 
-`setup` supports:
+The command generates and stores the API wallet key locally in `~/.openbroker/.env` with mode `0600`, prints an approval URL, and waits up to ten minutes for browser approval. Handle that handoff as follows:
 
-1. **Fresh wallet** — simplest for agents; builder fee approval is handled automatically.
+1. Keep the setup process running. Polling output is expected; do not treat it as a stuck command.
+2. Capture the `https://openbroker.dev/approve?agent=...` URL from terminal output and immediately show it to the user as a clickable link.
+3. Ask the user to open the link, connect the funded master Hyperliquid wallet they want OpenBroker to trade on, review the addresses and network, and sign the requested approvals. On mainnet this authorizes the API agent and the 1 bps builder fee; it does not grant withdrawal access.
+4. Never ask the user to paste a master-wallet or API-wallet private key into Codex. Never display the key or read the config file into the conversation.
+5. Leave the terminal session running while the user completes approval. The CLI detects approval automatically and saves `HYPERLIQUID_ACCOUNT_ADDRESS` as the master account.
+6. After setup completes, verify the connection with `openbroker account --json` and report the master account address, API signing-wallet address, account mode, and equity without exposing secrets.
+
+If approval times out, preserve the incomplete config and approval URL. Ask the user to finish approval, then rerun `openbroker setup --api-wallet`; the CLI reuses the existing API key and resumes polling instead of generating another wallet.
+
+If a complete config already exists, do not delete or replace it without explicit user approval. Inspect account identity with `openbroker account --json` first.
+
+The interactive `openbroker setup` command still supports three modes, with API wallet as the default when the user presses Enter:
+
+1. **Fresh wallet** — creates a separately funded wallet; builder fee approval is handled automatically.
 2. **Imported key** — use an existing wallet.
-3. **API wallet** — can trade but not withdraw; the human owner must approve it in a browser.
+3. **API wallet (default)** — can trade but not withdraw; the human owner approves it in a browser.
 
 For API wallets, `HYPERLIQUID_PRIVATE_KEY` is the signing key and `HYPERLIQUID_ACCOUNT_ADDRESS` must be the funded master account. If account output shows `$0` equity unexpectedly, check that mapping first.
 

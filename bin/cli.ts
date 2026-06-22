@@ -11,6 +11,7 @@ const scriptsDir = path.resolve(__dirname, '../scripts');
 
 const commands: Record<string, { script: string; description: string }> = {
   // Setup
+  'install': { script: 'setup/install.ts', description: 'Install OpenBroker for an agent harness' },
   'setup': { script: 'setup/onboard.ts', description: 'Interactive setup wizard' },
   'onboard': { script: 'setup/onboard.ts', description: 'Interactive setup wizard' },
   'approve-builder': { script: 'setup/approve-builder.ts', description: 'Approve builder fee' },
@@ -68,6 +69,7 @@ Open Broker - Hyperliquid Trading CLI
 Usage: openbroker <command> [options]
 
 Setup:
+  install              Install OpenBroker for Codex or another agent harness
   setup                One-command setup (wallet + config + builder approval)
 
 Info Commands:
@@ -136,6 +138,7 @@ Utility:
   approve-builder      Check or retry builder fee approval
 
 Examples:
+  npx openbroker@latest install --codex        # Install skill + CLI + API-wallet setup
   openbroker setup --api-wallet                 # Recommended restricted API-wallet setup
   openbroker account                            # View account info
   openbroker buy --coin ETH --size 0.1          # Market buy 0.1 ETH

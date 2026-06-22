@@ -5,6 +5,7 @@ All notable changes to Open Broker will be documented in this file.
 ## [1.9.1] - 2026-06-22
 
 ### Changed
+- Added `openbroker install --codex` and `npx openbroker@latest install --codex` for one-command Codex skill installation, persistent CLI installation, and restricted API-wallet onboarding.
 - Made restricted API-wallet onboarding the recommended interactive default.
 - Added `openbroker setup --api-wallet` for deterministic agent setup without the wallet-selection prompt.
 - Updated the Codex skill to install the CLI, hand the browser approval URL to the user, wait for authorization, and verify the connected master account without exposing private keys.

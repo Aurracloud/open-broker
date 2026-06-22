@@ -8,6 +8,16 @@ Hyperliquid trading CLI. Execute orders, manage positions, and run trading strat
 npm install -g openbroker
 ```
 
+### Codex: one-command install
+
+Install the Codex skill, persistent CLI, and restricted API-wallet onboarding flow:
+
+```bash
+npx openbroker@latest install --codex
+```
+
+When the command prints an approval URL, open it and connect the funded master Hyperliquid account you want OpenBroker to trade on. Restart Codex or start a new thread when setup finishes, then invoke `$openbroker`.
+
 ## Quick Start
 
 ```bash
@@ -27,6 +37,7 @@ openbroker search --query GOLD              # Find markets
 ### Setup
 
 ```bash
+npx openbroker@latest install --codex  # Codex skill + CLI + API-wallet onboarding
 openbroker setup --api-wallet   # Recommended: restricted agent wallet + browser approval
 openbroker setup                # Interactive; API wallet is the default
 ```

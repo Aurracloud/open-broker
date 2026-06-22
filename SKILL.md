@@ -21,7 +21,15 @@ Use the `openbroker` CLI as the canonical interface. Prefer structured JSON outp
 
 Use the following flow when the user asks to install, set up, or use OpenBroker. Do not ask the user for a private key.
 
-First check whether Node.js 22+ and the CLI are installed:
+For a fresh Codex installation, prefer the unified harness installer:
+
+```bash
+npx --yes openbroker@latest install --codex
+```
+
+This installs or updates the Codex skill, installs the persistent `openbroker` CLI, and starts restricted API-wallet onboarding. Keep the command attached while it prints the browser approval link and polls for authorization.
+
+If the unified installer is unavailable or the skill is already installed, first check whether Node.js 22+ and the CLI are installed:
 
 ```bash
 node --version

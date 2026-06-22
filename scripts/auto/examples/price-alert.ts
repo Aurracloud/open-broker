@@ -1,7 +1,7 @@
 // Price Alert — Real-time price monitoring via WebSocket
 // Showcases WebSocket-driven price_change and order_update events
 
-import type { AutomationAPI, AutomationConfig } from '../types.js';
+import type { AutomationAPI, AutomationConfig, AutomationGuardrails } from '../types.js';
 
 export const config: AutomationConfig = {
   description: 'Real-time price alerts via WebSocket — log price moves and order updates',
@@ -12,6 +12,8 @@ export const config: AutomationConfig = {
     below:     { type: 'number',  description: 'Alert when price goes below this level (0 = disabled)', default: 0 },
   },
 };
+
+export const guardrails: AutomationGuardrails = { mode: 'read-only' };
 
 export default function priceAlert(api: AutomationAPI) {
   const COIN = api.state.get<string>('coin', 'BTC')!;

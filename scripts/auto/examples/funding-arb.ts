@@ -1,6 +1,6 @@
 // Funding Arbitrage — Collect funding by positioning opposite to the crowd
 
-import type { AutomationAPI, AutomationConfig } from '../types.js';
+import type { AutomationAPI, AutomationConfig, AutomationGuardrailContext, AutomationGuardrails } from '../types.js';
 
 export const config: AutomationConfig = {
   description: 'Funding arbitrage — collect funding by positioning opposite to the crowd',
@@ -12,6 +12,24 @@ export const config: AutomationConfig = {
     closeAt:    { type: 'number', description: 'Close when funding drops below this %', default: 5 },
   },
 };
+
+export function guardrails({ config: values }: AutomationGuardrailContext): AutomationGuardrails {
+  const sizeUsd = Number(values.sizeUsd ?? 5000);
+  return {
+    mode: 'trading',
+    allowedMarkets: [String(values.coin ?? 'HYPE')],
+    maxOrderUsd: sizeUsd * 1.1,
+    maxPositionUsd: sizeUsd * 1.1,
+    maxTotalExposureUsd: sizeUsd * 1.1,
+    maxLeverage: 1,
+    maxMarginUsedPct: 50,
+    maxOpenOrders: 5,
+    maxOrdersPerMinute: 4,
+    maxSlippageBps: 50,
+    allowMarketOrders: true,
+    allowAccountWideCancel: false,
+  };
+}
 
 export default function fundingArb(api: AutomationAPI) {
   const COIN = api.state.get<string>('coin', 'HYPE')!;
@@ -48,7 +66,7 @@ export default function fundingArb(api: AutomationAPI) {
       if (shouldClose) {
         api.log.info(`Funding dropped to ${annualizedPct.toFixed(2)}% (below ${CLOSE_AT}%), closing ${positionSide}`);
         const closeIsBuy = positionSide === 'short';
-        await api.client.marketOrder(coin, closeIsBuy, positionSize);
+        await api.client.marketOrder(coin, closeIsBuy, positionSize, undefined, 1);
 
         inPosition = false;
         api.state.set('inPosition', false);
@@ -69,7 +87,7 @@ export default function fundingArb(api: AutomationAPI) {
       const size = SIZE_USD / price;
 
       api.log.info(`Funding at ${annualizedPct.toFixed(2)}% — opening ${side} ${size.toFixed(6)} ${coin}`);
-      const response = await api.client.marketOrder(coin, !shouldShort, size);
+      const response = await api.client.marketOrder(coin, !shouldShort, size, undefined, 1);
 
       if (response.status === 'ok' && response.response && typeof response.response === 'object') {
         const status = response.response.data.statuses[0];

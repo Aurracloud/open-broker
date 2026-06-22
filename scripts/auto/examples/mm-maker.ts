@@ -1,6 +1,6 @@
 // Maker-Only Market Making — ALO orders that guarantee maker rebates
 
-import type { AutomationAPI, AutomationConfig } from '../types.js';
+import type { AutomationAPI, AutomationConfig, AutomationGuardrailContext, AutomationGuardrails } from '../types.js';
 
 export const config: AutomationConfig = {
   description: 'Maker-only market making — ALO orders for guaranteed maker rebates',
@@ -12,6 +12,23 @@ export const config: AutomationConfig = {
     skewFactor:  { type: 'number', description: 'Inventory skew aggressiveness', default: 2.0 },
   },
 };
+
+export function guardrails({ config: values }: AutomationGuardrailContext): AutomationGuardrails {
+  return {
+    mode: 'trading',
+    allowedMarkets: [String(values.coin ?? 'HYPE')],
+    maxOrderUsd: 10_000,
+    maxPositionUsd: 25_000,
+    maxTotalExposureUsd: 25_000,
+    maxLeverage: 1,
+    maxMarginUsedPct: 50,
+    maxOpenOrders: 10,
+    maxOrdersPerMinute: 60,
+    maxSlippageBps: 25,
+    allowMarketOrders: false,
+    allowAccountWideCancel: false,
+  };
+}
 
 export default function mmMaker(api: AutomationAPI) {
   const COIN = api.state.get<string>('coin', 'HYPE')!;
@@ -95,7 +112,7 @@ export default function mmMaker(api: AutomationAPI) {
 
     // Place ALO bid
     if (shouldBid && !bidOid && safeBid < book.bestAsk) {
-      const resp = await api.client.limitOrder(COIN, true, SIZE, safeBid, 'Alo', false);
+      const resp = await api.client.limitOrder(COIN, true, SIZE, safeBid, 'Alo', false, 1);
       if (resp.status === 'ok' && resp.response && typeof resp.response === 'object') {
         const s = resp.response.data.statuses[0];
         if (s?.resting) { bidOid = s.resting.oid; bidPrice = safeBid; }
@@ -105,7 +122,7 @@ export default function mmMaker(api: AutomationAPI) {
 
     // Place ALO ask
     if (shouldAsk && !askOid && safeAsk > book.bestBid) {
-      const resp = await api.client.limitOrder(COIN, false, SIZE, safeAsk, 'Alo', false);
+      const resp = await api.client.limitOrder(COIN, false, SIZE, safeAsk, 'Alo', false, 1);
       if (resp.status === 'ok' && resp.response && typeof resp.response === 'object') {
         const s = resp.response.data.statuses[0];
         if (s?.resting) { askOid = s.resting.oid; askPrice = safeAsk; }

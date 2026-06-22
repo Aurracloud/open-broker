@@ -2,6 +2,15 @@
 
 All notable changes to Open Broker will be documented in this file.
 
+## [1.9.2] - 2026-06-22
+
+### Breaking
+- Every automation must now export a validated `guardrails` policy. Monitoring scripts use `{ mode: 'read-only' }`; trading scripts must declare explicit market, notional, exposure, leverage, margin, open-order, rate, slippage, market-order, and account-wide-cancel limits.
+
+### Added
+- Added runtime guardrail enforcement around every supported `api.client` write method, including bulk and HIP-4 outcome methods that were previously missing from dry-run and audit interception.
+- Added fail-closed account preflight checks, explicit leverage enforcement for risk-increasing perp orders, rolling order-rate limits, audit records for blocked writes, and unit coverage for schema and runtime behavior.
+
 ## [1.9.1] - 2026-06-22
 
 ### Changed

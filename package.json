@@ -1,6 +1,6 @@
 {
   "name": "openbroker",
-  "version": "1.9.2",
+  "version": "1.9.3",
   "description": "Hyperliquid trading CLI - execute orders, manage positions, and run trading strategies",
   "type": "module",
   "bin": {
@@ -51,8 +51,9 @@
     "funding-scan": "tsx scripts/info/funding-scan.ts",
     "outcomes": "tsx scripts/info/outcomes.ts",
     "build": "tsc",
-    "prepublishOnly": "npm run build && npm run test:cli",
-    "test:cli": "node --import tsx bin/cli.ts --help"
+    "prepublishOnly": "npm run build && npm run test:guardrails && npm run test:cli",
+    "test:cli": "node --import tsx bin/cli.ts --help",
+    "test:guardrails": "node --import tsx --test scripts/auto/guardrails.test.ts"
   },
   "dependencies": {
     "@nktkas/hyperliquid": "^0.30.3",

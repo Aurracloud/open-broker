@@ -220,6 +220,54 @@ Run flags:
 
 Bundled examples are **references, not production strategies**. Read them for API patterns, then write a purpose-built script with explicit sizing, exit logic, and failure behavior.
 
+### Required guardrail contract
+
+Every automation module must export both `guardrails` and a default factory. Validation runs before the factory or any `onStart` hook. A missing, malformed, or internally inconsistent policy prevents startup.
+
+Use a read-only policy for monitoring and alerting:
+
+```ts
+import type { AutomationAPI, AutomationGuardrails } from 'openbroker';
+
+export const guardrails: AutomationGuardrails = { mode: 'read-only' };
+
+export default function monitor(api: AutomationAPI) {
+  api.on('price_change', ({ coin, changePct }) => api.log.info(`${coin}: ${changePct}%`));
+}
+```
+
+Read-only mode blocks every client write. Trading policies must declare every field below:
+
+```ts
+import type { AutomationAPI, AutomationGuardrails } from 'openbroker';
+
+export const guardrails: AutomationGuardrails = {
+  mode: 'trading',
+  allowedMarkets: ['ETH'],       // ETH, xyz:CL, spot:HYPE, or #<outcome encoding>
+  maxOrderUsd: 500,
+  maxPositionUsd: 1_000,
+  maxTotalExposureUsd: 2_500,
+  maxLeverage: 2,
+  maxMarginUsedPct: 50,
+  maxOpenOrders: 10,
+  maxOrdersPerMinute: 6,
+  maxSlippageBps: 50,
+  allowMarketOrders: true,
+  allowAccountWideCancel: false,
+};
+
+export default function strategy(api: AutomationAPI) {
+  // Risk-increasing perp orders must pass leverage explicitly.
+  api.onStart(() => api.client.limitOrder('ETH', true, 0.1, 2_000, 'Gtc', false, 2));
+}
+```
+
+When allowed markets depend on `--set` values, export a factory such as `guardrails({ config }) { ... }`; the returned object is still strictly validated. Wildcard markets and unknown policy fields are rejected.
+
+All `api.client` write methods cross the runtime policy proxy in live and `--dry` modes. Before risk-increasing orders, the runtime refreshes account positions, spot balances, prices, margin, and open orders; calculates projected per-market and total exposure; enforces leverage, margin, order-count, rate, market-order, and slippage limits; then either submits or throws `GuardrailViolation`. Blocks are logged and written to the audit trail as `guardrail_block`. Cancellations and genuinely risk-reducing orders remain available when exposure or margin is already above its cap, but market allowlists and explicit account-wide-cancel policy still apply. Administrative writes such as `approveBuilderFee` are always blocked inside automations.
+
+Treat `api.client` as the only supported execution path. Automation files are trusted TypeScript running in-process, not an OS sandbox; direct exchange SDK imports would bypass the runtime boundary and must not be generated or accepted during review.
+
 ### Automation API essentials
 
 - `api.client` — full Hyperliquid client.
@@ -227,6 +275,7 @@ Bundled examples are **references, not production strategies**. Read them for AP
 - `api.state` — persisted state; survives restarts.
 - `api.audit.record(...)` / `api.audit.metric(...)` — durable observability.
 - `api.dryRun` — whether writes are intercepted.
+- `api.guardrails` — validated policy currently enforced by the runtime.
 
 Core events include `tick`, `price_change`, `funding_update`, `position_opened`, `position_closed`, `position_changed`, `pnl_threshold`, `margin_warning`, `order_filled`, `order_update`, and `liquidation`.
 

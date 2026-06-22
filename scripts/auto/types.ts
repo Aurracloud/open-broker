@@ -8,6 +8,57 @@ import type { HyperliquidClient } from '../core/client.js';
 /** What an automation .ts file exports */
 export type AutomationFactory = (api: AutomationAPI) => void | Promise<void>;
 
+/** Runtime-enforced policy exported by every automation module. */
+export type AutomationGuardrails =
+  | ReadOnlyAutomationGuardrails
+  | TradingAutomationGuardrails;
+
+export interface ReadOnlyAutomationGuardrails {
+  /** Read-only automations cannot call any client write method. */
+  mode: 'read-only';
+}
+
+export interface TradingAutomationGuardrails {
+  mode: 'trading';
+  /** Canonical markets this automation may trade: `ETH`, `xyz:CL`, `spot:HYPE`, `#1230`. */
+  allowedMarkets: string[];
+  /** Maximum USD notional for one submitted order. */
+  maxOrderUsd: number;
+  /** Maximum absolute USD exposure in any one market after an order. */
+  maxPositionUsd: number;
+  /** Maximum absolute USD exposure across the account after an order. */
+  maxTotalExposureUsd: number;
+  /** Maximum leverage the automation may request or use when increasing perp exposure. */
+  maxLeverage: number;
+  /** Maximum account margin utilization allowed after a risk-increasing perp order. */
+  maxMarginUsedPct: number;
+  /** Maximum account-wide open orders after this automation submits an order. */
+  maxOpenOrders: number;
+  /** Maximum risk-increasing order submissions in a rolling 60-second window. */
+  maxOrdersPerMinute: number;
+  /** Maximum slippage passed to market-order helpers. */
+  maxSlippageBps: number;
+  /** Whether market-order helpers may be used. */
+  allowMarketOrders: boolean;
+  /** Whether `cancelAll()` without a market or an armed `scheduleCancel()` is allowed. */
+  allowAccountWideCancel: boolean;
+}
+
+export interface AutomationGuardrailContext {
+  /** Persisted automation state with current `--set` overrides applied. */
+  config: Readonly<Record<string, unknown>>;
+}
+
+/** Guardrails may be static or derived from startup config, but the result is always validated. */
+export type AutomationGuardrailsExport =
+  | AutomationGuardrails
+  | ((context: AutomationGuardrailContext) => AutomationGuardrails);
+
+export interface LoadedAutomation {
+  factory: AutomationFactory;
+  guardrails: AutomationGuardrails;
+}
+
 /** Config field descriptor for example automations */
 export interface AutomationConfigField {
   type: 'string' | 'number' | 'boolean';
@@ -206,6 +257,9 @@ export interface AutomationAPI {
 
   /** True if running in --dry mode (write methods are intercepted) */
   dryRun: boolean;
+
+  /** Validated policy currently enforced by the runtime client proxy. */
+  guardrails: Readonly<AutomationGuardrails>;
 }
 
 // ── Runtime internals ───────────────────────────────────────────────

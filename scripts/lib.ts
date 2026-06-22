@@ -80,6 +80,16 @@ export {
 } from './auto/loader.js';
 
 export {
+  GuardrailViolation,
+  CLIENT_WRITE_METHODS,
+  canonicalMarket,
+  validateAutomationGuardrails,
+  resolveAutomationGuardrails,
+  createGuardrailedClient,
+} from './auto/guardrails.js';
+export type { GuardrailedClientOptions } from './auto/guardrails.js';
+
+export {
   registerAutomation,
   unregisterAutomation,
   cleanRegistry,

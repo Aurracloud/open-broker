@@ -50,6 +50,8 @@ Scripts are loaded from:
   3. Bundled examples (via --example)
 
 Writing an automation:
+  export const guardrails = { mode: 'read-only' };
+
   export default function(api) {
     api.on('price_change', async ({ coin, changePct }) => {
       api.log.info(\`\${coin} moved \${changePct.toFixed(2)}%\`);
@@ -207,6 +209,7 @@ function listCommand() {
   if (automations.length === 0 && examples.length === 0) {
     console.log('No automations found in ~/.openbroker/automations/');
     console.log('\nCreate a .ts file there with:');
+    console.log("  export const guardrails = { mode: 'read-only' };");
     console.log('  export default function(api) { ... }');
     console.log('\nOr run a bundled example: openbroker auto examples');
     return;

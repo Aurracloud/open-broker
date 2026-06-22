@@ -1,6 +1,6 @@
 // Grid Trading — Place buy/sell orders at evenly spaced price levels
 
-import type { AutomationAPI, AutomationConfig } from '../types.js';
+import type { AutomationAPI, AutomationConfig, AutomationGuardrailContext, AutomationGuardrails } from '../types.js';
 
 export const config: AutomationConfig = {
   description: 'Grid trading — buy/sell orders at evenly spaced price levels',
@@ -13,6 +13,23 @@ export const config: AutomationConfig = {
     mode:  { type: 'string', description: 'Grid mode: neutral, long, or short', default: 'neutral' },
   },
 };
+
+export function guardrails({ config: values }: AutomationGuardrailContext): AutomationGuardrails {
+  return {
+    mode: 'trading',
+    allowedMarkets: [String(values.coin ?? 'HYPE')],
+    maxOrderUsd: 10_000,
+    maxPositionUsd: 25_000,
+    maxTotalExposureUsd: 25_000,
+    maxLeverage: 1,
+    maxMarginUsedPct: 50,
+    maxOpenOrders: 25,
+    maxOrdersPerMinute: 25,
+    maxSlippageBps: 50,
+    allowMarketOrders: false,
+    allowAccountWideCancel: false,
+  };
+}
 
 interface GridLevel {
   price: number;
@@ -58,7 +75,7 @@ export default function grid(api: AutomationAPI) {
 
       const level: GridLevel = { price, side, size: SIZE };
 
-      const response = await api.client.limitOrder(COIN, side === 'buy', SIZE, price, 'Gtc', false);
+      const response = await api.client.limitOrder(COIN, side === 'buy', SIZE, price, 'Gtc', false, 1);
       if (response.status === 'ok' && response.response && typeof response.response === 'object') {
         const status = response.response.data.statuses[0];
         if (status?.resting) {
@@ -105,7 +122,7 @@ export default function grid(api: AutomationAPI) {
 
       if (oppositePrice < lower || oppositePrice > upper) continue;
 
-      const response = await api.client.limitOrder(COIN, oppositeSide === 'buy', SIZE, oppositePrice, 'Gtc', false);
+      const response = await api.client.limitOrder(COIN, oppositeSide === 'buy', SIZE, oppositePrice, 'Gtc', false, 1);
       if (response.status === 'ok' && response.response && typeof response.response === 'object') {
         const status = response.response.data.statuses[0];
         if (status?.resting) {

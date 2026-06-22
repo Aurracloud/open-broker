@@ -4,7 +4,14 @@ import { existsSync, readdirSync, mkdirSync } from 'fs';
 import path from 'path';
 import os from 'os';
 import { fileURLToPath } from 'url';
-import type { AutomationFactory, AutomationConfig } from './types.js';
+import { resolveAutomationGuardrails } from './guardrails.js';
+import type {
+  AutomationFactory,
+  AutomationConfig,
+  AutomationGuardrailContext,
+  AutomationGuardrailsExport,
+  LoadedAutomation,
+} from './types.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -117,8 +124,27 @@ function resolveAutomationConfig(mod: Record<string, unknown>): AutomationConfig
   return null;
 }
 
-/** Load an automation module and validate the default export */
-export async function loadAutomation(scriptPath: string): Promise<AutomationFactory> {
+function resolveGuardrailsExport(mod: Record<string, unknown>): AutomationGuardrailsExport | null {
+  const candidates = [
+    mod.guardrails,
+    (mod.default as Record<string, unknown> | undefined)?.guardrails,
+    (mod["module.exports"] as Record<string, unknown> | undefined)?.guardrails,
+  ];
+
+  for (const candidate of candidates) {
+    if (candidate && (typeof candidate === 'object' || typeof candidate === 'function')) {
+      return candidate as AutomationGuardrailsExport;
+    }
+  }
+
+  return null;
+}
+
+/** Load an automation module and validate its factory plus required guardrails export. */
+export async function loadAutomation(
+  scriptPath: string,
+  context: AutomationGuardrailContext = { config: {} },
+): Promise<LoadedAutomation> {
   const absolutePath = path.resolve(scriptPath);
 
   // Dynamic import — tsx handles TypeScript transpilation
@@ -132,7 +158,18 @@ export async function loadAutomation(scriptPath: string): Promise<AutomationFact
     );
   }
 
-  return factory as AutomationFactory;
+  const guardrailsExport = resolveGuardrailsExport(mod as Record<string, unknown>);
+  if (!guardrailsExport) {
+    throw new Error(
+      `Automation script must export "guardrails".\n` +
+      `Use { mode: "read-only" } for monitoring-only scripts or a validated trading policy.`,
+    );
+  }
+
+  return {
+    factory: factory as AutomationFactory,
+    guardrails: resolveAutomationGuardrails(guardrailsExport, context),
+  };
 }
 
 /** List available automation scripts in ~/.openbroker/automations/ */

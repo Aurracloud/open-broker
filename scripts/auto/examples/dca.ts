@@ -1,6 +1,6 @@
 // DCA (Dollar Cost Averaging) — Buy fixed USD amounts at regular intervals
 
-import type { AutomationAPI, AutomationConfig } from '../types.js';
+import type { AutomationAPI, AutomationConfig, AutomationGuardrailContext, AutomationGuardrails } from '../types.js';
 
 export const config: AutomationConfig = {
   description: 'Dollar cost averaging — buy fixed USD amounts at regular intervals',
@@ -11,6 +11,25 @@ export const config: AutomationConfig = {
     count:    { type: 'number', description: 'Total number of purchases', default: 24 },
   },
 };
+
+export function guardrails({ config: values }: AutomationGuardrailContext): AutomationGuardrails {
+  const amount = Number(values.amount ?? 100);
+  const count = Number(values.count ?? 24);
+  return {
+    mode: 'trading',
+    allowedMarkets: [String(values.coin ?? 'HYPE')],
+    maxOrderUsd: amount * 1.1,
+    maxPositionUsd: amount * count * 1.1,
+    maxTotalExposureUsd: amount * count * 1.1,
+    maxLeverage: 1,
+    maxMarginUsedPct: 50,
+    maxOpenOrders: 5,
+    maxOrdersPerMinute: 5,
+    maxSlippageBps: 50,
+    allowMarketOrders: true,
+    allowAccountWideCancel: false,
+  };
+}
 
 export default function dca(api: AutomationAPI) {
   const COIN = api.state.get<string>('coin', 'HYPE')!;
@@ -43,7 +62,7 @@ export default function dca(api: AutomationAPI) {
     const size = AMOUNT_USD / price;
     api.log.info(`[${purchased + 1}/${MAX_PURCHASES}] Buying ~$${AMOUNT_USD} of ${COIN} @ $${price.toFixed(2)}`);
 
-    const response = await api.client.marketOrder(COIN, true, size);
+    const response = await api.client.marketOrder(COIN, true, size, undefined, 1);
     if (response.status === 'ok' && response.response && typeof response.response === 'object') {
       const status = response.response.data.statuses[0];
       if (status?.filled) {

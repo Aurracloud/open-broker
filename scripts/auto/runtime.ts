@@ -13,6 +13,7 @@ import {
 import { WebSocketManager } from '../core/ws.js';
 import { AutomationEventBus } from './events.js';
 import { loadAutomation } from './loader.js';
+import { CLIENT_WRITE_METHODS, createGuardrailedClient } from './guardrails.js';
 import { registerAutomation, unregisterAutomation, getRegisteredAutomations as getRegisteredFromFile } from './registry.js';
 import { createAutomationAudit, toSerializable, type AutomationAuditSink } from './audit.js';
 import { startKeepAwake, type KeepAwakeHandle } from './keep-awake.js';
@@ -29,6 +30,7 @@ import type {
   PublishOptions,
   ScheduledTask,
   RunningAutomation,
+  LoadedAutomation,
 } from './types.js';
 
 // ── Observer fan-out ────────────────────────────────────────────────
@@ -105,13 +107,6 @@ function fanOutAgentAction(
 }
 
 const STATE_DIR = path.join(os.homedir(), '.openbroker', 'state');
-const AUDITED_WRITE_METHODS = new Set([
-  'order', 'marketOrder', 'limitOrder', 'triggerOrder',
-  'takeProfit', 'stopLoss', 'cancel', 'cancelAll',
-  'spotOrder', 'spotMarketOrder', 'spotLimitOrder', 'spotCancel',
-  'updateLeverage', 'approveBuilderFee', 'twapOrder', 'twapCancel',
-]);
-
 // ── State persistence ───────────────────────────────────────────────
 
 interface StateController {
@@ -202,19 +197,11 @@ function createLogger(id: string, verbose: boolean, audit?: AutomationAuditSink)
 
 // ── Dry-run client proxy ────────────────────────────────────────────
 
-const WRITE_METHODS = new Set([
-  'order', 'marketOrder', 'limitOrder', 'triggerOrder',
-  'takeProfit', 'stopLoss', 'cancel', 'cancelAll',
-  'updateLeverage', 'approveBuilderFee',
-  'spotOrder', 'spotMarketOrder', 'spotLimitOrder', 'spotCancel',
-  'twapOrder', 'twapCancel',
-]);
-
 function createDryClient(client: HyperliquidClient, log: AutomationLogger): HyperliquidClient {
   return new Proxy(client, {
     get(target, prop, receiver) {
       const value = Reflect.get(target, prop, receiver);
-      if (typeof prop === 'string' && WRITE_METHODS.has(prop) && typeof value === 'function') {
+      if (typeof prop === 'string' && CLIENT_WRITE_METHODS.has(prop) && typeof value === 'function') {
         return (...args: unknown[]) => {
           log.info(`[DRY] ${prop}(${args.map(a => JSON.stringify(a)).join(', ')})`);
           return Promise.resolve({ status: 'ok', response: { type: 'dry_run' } });
@@ -234,7 +221,7 @@ function createAuditedClient(
   return new Proxy(client, {
     get(target, prop, receiver) {
       const value = Reflect.get(target, prop, receiver);
-      if (typeof prop === 'string' && AUDITED_WRITE_METHODS.has(prop) && typeof value === 'function') {
+      if (typeof prop === 'string' && CLIENT_WRITE_METHODS.has(prop) && typeof value === 'function') {
         return async (...args: unknown[]) => {
           const actionId = `${prop}:${Date.now()}:${Math.random().toString(16).slice(2)}`;
           audit.recordAction({
@@ -531,8 +518,38 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
     }
   }
   const observers = await loadConventionObservers(log);
+  let loaded: LoadedAutomation;
+  try {
+    log.info(`Loading automation: ${scriptPath}`);
+    loaded = await loadAutomation(scriptPath, { config: stateController.snapshot() });
+  } catch (err) {
+    const error = err instanceof Error ? err : new Error(String(err));
+    audit.recordError('guardrail_validation', error);
+    await audit.stop({
+      status: 'error',
+      stopReason: 'guardrail_validation_error',
+      pollCount: 0,
+      eventsEmitted: 0,
+    });
+    keepAwake?.stop();
+    throw error;
+  }
+  audit.recordNote('guardrails', loaded.guardrails);
   const baseClient = dryRun ? createDryClient(rawClient, log) : rawClient;
-  const client = createAuditedClient(baseClient, audit, dryRun, observers);
+  const guardedClient = createGuardrailedClient(baseClient, {
+    policy: loaded.guardrails,
+    rawClient,
+    log,
+    onViolation: (error, method, args) => {
+      audit.recordNote('guardrail_block', {
+        code: error.code,
+        message: error.message,
+        method,
+        args: toSerializable(args),
+      });
+    },
+  });
+  const client = createAuditedClient(guardedClient, audit, dryRun, observers);
 
   const startHooks: Array<() => void | Promise<void>> = [];
   const stopHooks: Array<() => void | Promise<void>> = [];
@@ -565,13 +582,12 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
     audit: auditApi,
     id,
     dryRun,
+    guardrails: loaded.guardrails,
   };
 
   try {
-    // Load and execute the factory function (registers handlers)
-    log.info(`Loading automation: ${scriptPath}`);
-    const factory = await loadAutomation(scriptPath);
-    await factory(api);
+    // Execute the already validated factory function (registers handlers).
+    await loaded.factory(api);
 
     // Call onStart hooks
     for (const hook of startHooks) {

@@ -37,6 +37,14 @@ function tradingPolicy(overrides: Partial<TradingAutomationGuardrails> = {}): Tr
 
 function mockClient(options: {
   positions?: Array<{ coin: string; size: number; price: number; leverage?: number }>;
+  spotBalances?: Array<{ coin: string; total: string }>;
+  spotData?: {
+    meta: {
+      tokens: Array<{ index: number; name: string }>;
+      universe: Array<{ name: string; tokens: [number, number] }>;
+    };
+    assetCtxs: Array<{ coin?: string; midPx: string; markPx: string }>;
+  };
 } = {}) {
   const calls: Array<{ method: string; args: unknown[] }> = [];
   const client = {
@@ -58,9 +66,9 @@ function mockClient(options: {
     },
     async getAllMids() { return { ETH: '2000', BTC: '50000' }; },
     async getOpenOrders() { return []; },
-    async getSpotBalances() { return { balances: [] }; },
+    async getSpotBalances() { return { balances: options.spotBalances ?? [] }; },
     async getSpotMetaAndAssetCtxs() {
-      return { meta: { tokens: [], universe: [] }, assetCtxs: [] };
+      return options.spotData ?? { meta: { tokens: [], universe: [] }, assetCtxs: [] };
     },
     resolveOutcomeRef() {
       return { outcome: 1, side: 0, encoding: 10, coin: '#10', tokenName: '+10', assetId: 100000010 };
@@ -75,6 +83,10 @@ function mockClient(options: {
     },
     async bulkOrder(...args: unknown[]) {
       calls.push({ method: 'bulkOrder', args });
+      return { status: 'ok' };
+    },
+    async spotLimitOrder(...args: unknown[]) {
+      calls.push({ method: 'spotLimitOrder', args });
       return { status: 'ok' };
     },
   } as unknown as HyperliquidClient;
@@ -183,4 +195,33 @@ test('account-wide exposure is checked while genuine reductions remain available
   });
   await reductionGuarded.marketOrder('ETH', false, 0.1);
   assert.equal(reducing.calls.length, 1);
+});
+
+test('spot exposure joins market contexts by pair identifier instead of array position', async () => {
+  const { client, calls } = mockClient({
+    spotBalances: [{ coin: 'HYPE', total: '3' }],
+    spotData: {
+      meta: {
+        tokens: [{ index: 0, name: 'USDC' }, { index: 1, name: 'HYPE' }],
+        universe: [{ name: '@107', tokens: [1, 0] }],
+      },
+      assetCtxs: [
+        { coin: '@999', midPx: '99999', markPx: '99999' },
+        { coin: '@107', midPx: '62.5', markPx: '62.5' },
+      ],
+    },
+  });
+  const guarded = createGuardrailedClient(client, {
+    policy: tradingPolicy({
+      allowedMarkets: ['spot:HYPE'],
+      maxOrderUsd: 100,
+      maxPositionUsd: 500,
+      maxTotalExposureUsd: 500,
+    }),
+    rawClient: client,
+    log: logger,
+  });
+
+  await guarded.spotLimitOrder('HYPE', true, 0.1, 62.5, 'Gtc');
+  assert.equal(calls.length, 1);
 });

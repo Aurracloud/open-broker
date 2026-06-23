@@ -401,12 +401,23 @@ async function loadRiskSnapshot(client: HyperliquidClient): Promise<RiskSnapshot
   }
 
   const tokens = new Map(spotData.meta.tokens.map((token) => [token.index, token.name]));
+  const spotContextsByCoin = new Map(
+    spotData.assetCtxs
+      .filter((context) => typeof context.coin === 'string')
+      .map((context) => [context.coin!, context]),
+  );
+  const contextsHaveCoinKeys = spotContextsByCoin.size > 0;
   const preferredSpot = new Map<string, { market: string; price: number; quote: number }>();
   for (let i = 0; i < spotData.meta.universe.length; i++) {
     const pair = spotData.meta.universe[i];
     const base = tokens.get(pair.tokens[0]);
     if (!base) continue;
-    const context = spotData.assetCtxs[i];
+    // spotMeta.universe and spotMetaAndAssetCtxs.assetCtxs are not guaranteed
+    // to share array indexes. Join by the canonical pair identifier whenever
+    // contexts include it (e.g. @107); use positional fallback only for older
+    // payloads that omit context.coin entirely.
+    const context = spotContextsByCoin.get(pair.name)
+      ?? (contextsHaveCoinKeys ? undefined : spotData.assetCtxs[i]);
     const price = parseFloat(context?.midPx || context?.markPx || mids[pair.name] || '0');
     if (!Number.isFinite(price) || price <= 0) continue;
     const market = base.startsWith('+') ? `#${base.slice(1)}` : canonicalSpotMarket(base);

@@ -2,6 +2,18 @@
 
 All notable changes to Open Broker will be documented in this file.
 
+## [1.9.3] - 2026-06-23
+
+### Changed
+- Made automation reads WebSocket-first for mids, asset contexts, account state, spot balances, per-dex open orders, and lazily subscribed L2 books, with transparent REST fallback.
+- Activated the existing all-dex context, all-dex clearinghouse, and spot-state subscriptions before strategy `onStart` hooks.
+- Decoupled `api.every()` from REST snapshot polling. Short `--poll` values now control the disconnected fallback cadence; connected runtimes reconcile over REST at most once per minute.
+- Cached and request-de-duplicated the REST-only predicted-funding feed for 60 seconds, retaining the last good value through transient rate limits.
+- Limited automation startup metadata to the native universe and deferred HIP-3 metadata until a prefixed market is actually referenced.
+
+### Added
+- Added realtime-cache tests covering live market/account reads, lazy order-book seeding, and disconnected REST fallback.
+
 ## [1.9.2] - 2026-06-22
 
 ### Breaking

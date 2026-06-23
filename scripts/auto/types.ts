@@ -220,7 +220,7 @@ export interface AutomationAPI {
   /** Subscribe to a market/account event */
   on<E extends AutomationEventType>(event: E, handler: AutomationEventHandler<E>): void;
 
-  /** Run a handler on a recurring interval (ms). Aligned to the poll loop. */
+  /** Run a handler on its own recurring scheduler, independent of REST reconciliation. */
   every(intervalMs: number, handler: () => void | Promise<void>): void;
 
   /** Called after all handlers are registered and polling begins */
@@ -290,6 +290,7 @@ export interface ScheduledTask {
   intervalMs: number;
   handler: () => void | Promise<void>;
   lastRun: number;
+  running?: boolean;
 }
 
 export interface RunningAutomation {

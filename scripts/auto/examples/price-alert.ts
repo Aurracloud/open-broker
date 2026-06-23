@@ -85,7 +85,7 @@ export default function priceAlert(api: AutomationAPI) {
     );
   });
 
-  // Periodic summary via REST heartbeat
+  // Periodic summary via the independent runtime scheduler
   api.on('tick', ({ pollCount }) => {
     if (pollCount % 10 === 0 && alertCount > 0) {
       api.log.info(`Summary: ${alertCount} alerts fired, last price: $${lastAlertPrice.toFixed(2)}`);

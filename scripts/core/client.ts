@@ -21,6 +21,28 @@ import type {
 import { loadConfig, isMainnet } from './config.js';
 import { roundPrice, roundSize } from './utils.js';
 
+export interface RealtimeBookSnapshot {
+  coin: string;
+  time: number;
+  levels: [
+    Array<{ px: string; sz: string; n: number }>,
+    Array<{ px: string; sz: string; n: number }>,
+  ];
+}
+
+export interface RealtimeDataProvider {
+  readonly connected: boolean;
+  getAllMids(): Record<string, string> | null;
+  getMainAssetCtxs(): AssetCtx[] | null;
+  getUserState(user: string, dex?: string): ClearinghouseState | null;
+  getUserStateAll(user: string): ClearinghouseState | null;
+  getSpotBalances(user: string): {
+    balances: Array<{ coin: string; token: number; hold: string; total: string; entryNtl: string }>;
+  } | null;
+  getOpenOrders(user: string): OpenOrder[] | null;
+  getL2Book(coin: string): Promise<RealtimeBookSnapshot | null>;
+}
+
 export class HyperliquidClient {
   private config: OpenBrokerConfig;
   private account: PrivateKeyAccount;
@@ -33,6 +55,8 @@ export class HyperliquidClient {
   private szDecimalsMap: Map<string, number> = new Map();
   /** Maps coin name → dex info for HIP-3 assets. Main dex assets have dexName=null */
   private coinDexMap: Map<string, { dexName: string | null; dexIdx: number; localName: string }> = new Map();
+  /** Static positional universe per dex, used to join allDexsAssetCtxs WS pushes. */
+  private dexUniverseMap: Map<string, string[]> = new Map();
   /** Cache of perpDexs list */
   private perpDexsCache: Array<{ name: string; fullName: string; deployer: string } | null> | null = null;
   /** Whether HIP-3 assets have been loaded into maps */
@@ -63,6 +87,16 @@ export class HyperliquidClient {
   private spotMetaLoaded: boolean = false;
   /** HIP-4 outcome metadata cache */
   private outcomeMeta: OutcomeMetaResponse | null = null;
+  /** Static main-dex universe retained while live asset contexts arrive over WebSocket. */
+  private staticMeta: MetaAndAssetCtxs['meta'] | null = null;
+  /** Runtime-owned live data cache. CLI calls leave this detached and remain REST-only. */
+  private realtime: RealtimeDataProvider | null = null;
+  private predictedFundingsCache: {
+    value: Array<[string, Array<[string, { fundingRate: string; nextFundingTime: number }]>]>;
+    timestamp: number;
+  } | null = null;
+  private predictedFundingsInFlight: Promise<Array<[string, Array<[string, { fundingRate: string; nextFundingTime: number }]>]>> | null = null;
+  private spotMetaCache: Awaited<ReturnType<HyperliquidClient['getSpotMeta']>> | null = null;
   public verbose: boolean = false;
 
   constructor(config?: OpenBrokerConfig) {
@@ -226,6 +260,11 @@ export class HyperliquidClient {
     return !isMainnet();
   }
 
+  /** Attach/detach the automation runtime's WebSocket-first data cache. */
+  setRealtimeDataProvider(provider: RealtimeDataProvider | null): void {
+    this.realtime = provider;
+  }
+
   /**
    * Returns vaultAddress param for SDK exchange calls.
    * Only used for vault trading (HYPERLIQUID_VAULT_ADDRESS set explicitly).
@@ -255,6 +294,10 @@ export class HyperliquidClient {
   // ============ Market Data ============
 
   async getMetaAndAssetCtxs(): Promise<MetaAndAssetCtxs> {
+    const liveCtxs = this.realtime?.connected ? this.realtime.getMainAssetCtxs() : null;
+    if (this.staticMeta && liveCtxs) {
+      return { meta: this.staticMeta, assetCtxs: liveCtxs };
+    }
     if (this.meta) return this.meta;
 
     this.log('Fetching metaAndAssetCtxs...');
@@ -277,6 +320,8 @@ export class HyperliquidClient {
       assetCtxs: response[1] as AssetCtx[],
     };
     this.meta = meta;
+    this.staticMeta = meta.meta;
+    this.dexUniverseMap.set('', meta.meta.universe.map((asset) => asset.name));
 
     // Build lookup maps for main dex
     meta.meta.universe.forEach((asset, index) => {
@@ -292,6 +337,29 @@ export class HyperliquidClient {
     }
 
     return meta;
+  }
+
+  /**
+   * Warm only the native/main static universe for an automation runtime.
+   * Dynamic contexts arrive via allDexsAssetCtxs, and HIP-3 metadata is loaded
+   * on demand when a strategy references a prefixed market. This avoids the
+   * old startup burst that fetched every HIP-3 dex before the socket opened.
+   */
+  async initializeRealtimeMetadata(): Promise<void> {
+    if (this.staticMeta) return;
+    const response = await this.withRetry(() => this.info.metaAndAssetCtxs(), 'metaAndAssetCtxs(realtime-init)');
+    const meta: MetaAndAssetCtxs = {
+      meta: { universe: response[0].universe as AssetMeta[] },
+      assetCtxs: response[1] as AssetCtx[],
+    };
+    this.meta = meta;
+    this.staticMeta = meta.meta;
+    this.dexUniverseMap.set('', meta.meta.universe.map((asset) => asset.name));
+    meta.meta.universe.forEach((asset, index) => {
+      this.assetMap.set(asset.name, index);
+      this.szDecimalsMap.set(asset.name, asset.szDecimals);
+      this.coinDexMap.set(asset.name, { dexName: null, dexIdx: 0, localName: asset.name });
+    });
   }
 
   /**
@@ -422,11 +490,16 @@ export class HyperliquidClient {
         this.coinDexMap.set(coinName, { dexName, dexIdx, localName });
         if (asset.maxLeverage) this.hip3MaxLeverageMap.set(coinName, asset.maxLeverage);
       });
+      this.dexUniverseMap.set(dexName, universe.map((asset) => (
+        asset.name.startsWith(`${dexName}:`) ? asset.name : `${dexName}:${asset.name}`
+      )));
     }
     this.loadedHip3Dexes.add(dexName);
   }
 
   async getAllMids(): Promise<Record<string, string>> {
+    const live = this.realtime?.connected ? this.realtime.getAllMids() : null;
+    if (live) return { ...live };
     this.log('Fetching allMids...');
     let response: Record<string, string>;
     try {
@@ -584,6 +657,7 @@ export class HyperliquidClient {
       isCanonical: boolean;
     }>;
   }> {
+    if (this.spotMetaCache) return this.spotMetaCache;
     this.log('Fetching spotMeta...');
     const data = await this.postInfo<{
       tokens: Array<{
@@ -602,6 +676,7 @@ export class HyperliquidClient {
         isCanonical: boolean;
       }>;
     }>({ type: 'spotMeta' }, 'spotMeta');
+    this.spotMetaCache = data;
     this.log('spotMeta response:', JSON.stringify(data).slice(0, 500));
     return data;
   }
@@ -634,6 +709,23 @@ export class HyperliquidClient {
       prevDayPx: string;
     }>;
   }> {
+    const liveMids = this.realtime?.connected ? this.realtime.getAllMids() : null;
+    if (liveMids) {
+      const meta = await this.getSpotMeta();
+      return {
+        meta,
+        assetCtxs: meta.universe.map((pair) => {
+          const price = liveMids[pair.name] ?? '0';
+          return {
+            coin: pair.name,
+            dayNtlVlm: '0',
+            markPx: price,
+            midPx: price,
+            prevDayPx: price,
+          };
+        }),
+      };
+    }
     this.log('Fetching spotMetaAndAssetCtxs...');
     const data = await this.postInfo<unknown>(
       { type: 'spotMetaAndAssetCtxs' },
@@ -1003,6 +1095,9 @@ export class HyperliquidClient {
       entryNtl: string;
     }>;
   }> {
+    const target = user ?? this.address;
+    const live = this.realtime?.connected ? this.realtime.getSpotBalances(target) : null;
+    if (live) return live;
     this.log('Fetching spotClearinghouseState for:', user ?? this.address);
     const data = await this.postInfo<{
       balances: Array<{
@@ -1077,6 +1172,32 @@ export class HyperliquidClient {
     string, // coin
     Array<[string, { fundingRate: string; nextFundingTime: number }]> // venue funding rates
   ]>> {
+    const ttlMs = 60_000;
+    if (this.predictedFundingsCache && Date.now() - this.predictedFundingsCache.timestamp < ttlMs) {
+      return this.predictedFundingsCache.value;
+    }
+    if (this.predictedFundingsInFlight) return this.predictedFundingsInFlight;
+
+    this.predictedFundingsInFlight = this.fetchPredictedFundings();
+    try {
+      const value = await this.predictedFundingsInFlight;
+      this.predictedFundingsCache = { value, timestamp: Date.now() };
+      return value;
+    } catch (error) {
+      if (this.predictedFundingsCache) {
+        this.log('predictedFundings refresh failed; using stale cache:', this.describeError(error));
+        return this.predictedFundingsCache.value;
+      }
+      throw error;
+    } finally {
+      this.predictedFundingsInFlight = null;
+    }
+  }
+
+  private async fetchPredictedFundings(): Promise<Array<[
+    string,
+    Array<[string, { fundingRate: string; nextFundingTime: number }]>
+  ]>> {
     this.log('Fetching predictedFundings...');
     const baseUrl = isMainnet()
       ? 'https://api.hyperliquid.xyz'
@@ -1091,11 +1212,15 @@ export class HyperliquidClient {
       },
       body: JSON.stringify({ type: 'predictedFundings' }),
     });
+    if (!response.ok) {
+      throw new Error(`predictedFundings failed: HTTP ${response.status} ${response.statusText}`);
+    }
     const data = await response.json() as Array<[
       string,
       Array<[string, { fundingRate: string; nextFundingTime: number }]>
     ]>;
-    this.log('predictedFundings response length:', data?.length);
+    if (!Array.isArray(data)) throw new Error('predictedFundings returned malformed payload');
+    this.log('predictedFundings response length:', data.length);
     return data;
   }
 
@@ -1112,6 +1237,9 @@ export class HyperliquidClient {
     spread: number;
     spreadBps: number;
   }> {
+    const live = this.realtime?.connected ? await this.realtime.getL2Book(coin) : null;
+    if (live) return this.normalizeL2Book(live.levels);
+
     this.log('Fetching l2Book for:', coin);
     // API accepts prefixed names directly (e.g., "xyz:CL")
     let response: Awaited<ReturnType<typeof this.info.l2Book>>;
@@ -1129,8 +1257,20 @@ export class HyperliquidClient {
       throw new Error(`l2Book(${coin}) returned empty/malformed payload.`);
     }
 
-    const bids = (response.levels[0] ?? []) as Array<{ px: string; sz: string; n: number }>;
-    const asks = (response.levels[1] ?? []) as Array<{ px: string; sz: string; n: number }>;
+    return this.normalizeL2Book(response.levels as RealtimeBookSnapshot['levels']);
+  }
+
+  private normalizeL2Book(levels: RealtimeBookSnapshot['levels']): {
+    bids: Array<{ px: string; sz: string; n: number }>;
+    asks: Array<{ px: string; sz: string; n: number }>;
+    bestBid: number;
+    bestAsk: number;
+    midPrice: number;
+    spread: number;
+    spreadBps: number;
+  } {
+    const bids = levels[0] ?? [];
+    const asks = levels[1] ?? [];
 
     const bestBid = bids.length > 0 ? parseFloat(bids[0].px) : 0;
     const bestAsk = asks.length > 0 ? parseFloat(asks[0].px) : 0;
@@ -1264,6 +1404,28 @@ export class HyperliquidClient {
   invalidateMetaCache(): void {
     this.meta = null;
     // Keep the asset/szDecimals/coinDex maps - they don't change
+  }
+
+  /** Join an allDexsAssetCtxs WebSocket payload with the cached static universes. */
+  fundingRatesFromWs(ctxs: ReadonlyArray<[
+    string,
+    ReadonlyArray<{ funding?: string | number | null; premium?: string | number | null }>,
+  ]>): Map<string, { rate: number; premium: number }> {
+    const rates = new Map<string, { rate: number; premium: number }>();
+    for (const [dexName, values] of ctxs) {
+      const universe = this.dexUniverseMap.get(dexName || '');
+      if (!universe) continue;
+      for (let index = 0; index < Math.min(universe.length, values.length); index++) {
+        const coin = universe[index];
+        const value = values[index];
+        if (!coin || !value) continue;
+        rates.set(coin, {
+          rate: Number(value.funding ?? 0),
+          premium: Number(value.premium ?? 0),
+        });
+      }
+    }
+    return rates;
   }
 
   /**
@@ -1952,6 +2114,9 @@ export class HyperliquidClient {
   }
 
   async getUserState(user?: string, dex?: string): Promise<ClearinghouseState> {
+    const target = user ?? this.address;
+    const live = this.realtime?.connected ? this.realtime.getUserState(target, dex) : null;
+    if (live) return live;
     this.log('Fetching clearinghouseState for:', user ?? this.address, dex ? `dex: ${dex}` : '');
     const params: { user: string; dex?: string } = { user: user ?? this.address };
     if (dex !== undefined) params.dex = dex;
@@ -2107,6 +2272,9 @@ export class HyperliquidClient {
    * For standard accounts: aggregates margin summaries from each dex.
    */
   async getUserStateAll(user?: string): Promise<ClearinghouseState> {
+    const target = user ?? this.address;
+    const live = this.realtime?.connected ? this.realtime.getUserStateAll(target) : null;
+    if (live) return live;
     await this.getMetaAndAssetCtxs(); // Ensure HIP-3 dex list is loaded
 
     const unified = await this.isUnifiedAccount(user);
@@ -2149,7 +2317,10 @@ export class HyperliquidClient {
   }
 
   async getOpenOrders(user?: string): Promise<OpenOrder[]> {
-    this.log('Fetching openOrders for:', user ?? this.address);
+    const target = user ?? this.address;
+    const live = this.realtime?.connected ? this.realtime.getOpenOrders(target) : null;
+    if (live) return live;
+    this.log('Fetching openOrders for:', target);
     await this.getMetaAndAssetCtxs(); // Ensure HIP-3 dex list is loaded
 
     // Fetch main dex orders

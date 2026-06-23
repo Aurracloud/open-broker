@@ -213,7 +213,7 @@ Run flags:
 |---|---|
 | `--set key=value` | Repeatable typed config values |
 | `--id <name>` | Stable automation ID |
-| `--poll <ms>` | Poll interval, minimum 1000 ms |
+| `--poll <ms>` | REST fallback interval, minimum 1000 ms. While WebSocket is healthy, REST reconciliation is capped at once per minute. |
 | `--dry` | Intercept write methods |
 | `--no-ws` | Disable WebSocket and rely on REST polling |
 | `--allow-sleep` | Do not request OS sleep inhibition |
@@ -279,6 +279,23 @@ Treat `api.client` as the only supported execution path. Automation files are tr
 
 Core events include `tick`, `price_change`, `funding_update`, `position_opened`, `position_closed`, `position_changed`, `pnl_threshold`, `margin_warning`, `order_filled`, `order_update`, and `liquidation`.
 
+### WebSocket-first runtime
+
+WebSocket mode is enabled by default. Before `onStart`, the runtime subscribes to:
+
+- `allMids` for instant perp and spot prices;
+- `allDexsAssetCtxs` for funding, mark, oracle, open-interest, and premium changes;
+- `allDexsClearinghouseState` plus `spotState` for positions, margin, collateral, and balances;
+- `openOrders` for the native dex and every active HIP-3 dex so guardrail order-count checks stay live;
+- `orderUpdates`, `userFills`, and `userEvents` for order lifecycle, fills, funding payments, and liquidations;
+- `l2Book` lazily, the first time an automation requests a book for a coin.
+
+The normal `api.client` read methods are WebSocket-aware inside automations. `getAllMids()`, `getMetaAndAssetCtxs()`, `getUserState()`, `getUserStateAll()`, `getSpotBalances()`, `getOpenOrders()`, and `getL2Book()` return fresh socket data when available and transparently fall back to REST when the socket is disconnected, a subscription has not seeded yet, or live market data is stale. Automation code should keep using `api.client`; do not import a second exchange SDK or create a second socket.
+
+`api.every(intervalMs, handler)` runs on an independent scheduler and no longer causes a REST snapshot. `--poll` controls the disconnected fallback cadence. While the socket is healthy, the runtime performs a REST reconciliation no more than once per minute, even when an older launch command passes `--poll 5000`. Predicted cross-venue funding has no equivalent socket feed, so `getPredictedFundings()` is de-duplicated, cached for 60 seconds, and serves the last good value if a refresh is temporarily rate-limited.
+
+Use `--no-ws` only for debugging or networks that cannot maintain WebSockets. In that mode, `--poll` is the active REST cadence and event latency follows it.
+
 ### Monitoring and dashboard
 
 `openbroker-monitoring` is optional but useful for long-running automations, live debugging, and post-run inspection.
@@ -300,7 +317,7 @@ These matter more than boilerplate:
 
 1. **Model the strategy as a state machine.** Persist flags, streaks, targets, and recovery state with `api.state`; handlers can fire repeatedly and processes can restart.
 2. **Use hysteresis, not one-print decisions.** Confirmation loops, separate enter/exit thresholds, and debounce logic prevent churn from noisy funding or tiny price moves.
-3. **Use the freshest correct signal.** For funding strategies, prefer `getPredictedFundings()` when available; if you fall back to instantaneous funding from metadata, ensure the metadata cache is refreshed so the signal does not freeze after startup.
+3. **Use the freshest correct signal.** Instantaneous funding and prices are WebSocket-backed by default. Prefer `getPredictedFundings()` for cross-venue forecasts; the runtime refreshes that REST-only signal at most once per minute and retains the last good value through transient rate limits.
 4. **Price the flip, not just the signal.** Before closing and later reopening a carry, compare expected hold cost with round-trip trading cost. The HYPE carry automation counts maker fees across both legs plus builder fees before deciding whether a mildly negative funding window is worth exiting.
 5. **Respect settlement timing.** If the current predicted funding is still positive, a close right before hourly settlement can be economically wrong even when the broader signal weakened. Add a settlement-proximity guard when the strategy depends on funding capture.
 6. **Sequence multi-leg hedges deliberately.** For spot-long / perp-short carry, build spot first, then short only up to spot-backed exposure; unwind spot first, then close the short reduce-only. Recover accidental one-sided exposure explicitly instead of pretending it cannot happen.
@@ -312,7 +329,7 @@ These matter more than boilerplate:
 Additional practical caveats:
 
 - Positive-funding carry and negative-funding carry are not automatically symmetric. If the hedge requires short spot and the client/runtime cannot express that safely, do not invent an unhedged mirror trade.
-- `funding_update` fires for many assets every poll; filter by coin early.
+- `funding_update` is emitted from changed WebSocket asset contexts and may cover many assets; filter by coin early.
 - Dust matters: if residual size falls below exchange precision or `minTradeUsd`, stop chasing it.
 - `ALO` / post-only orders can be rejected when they would cross; treat that as an execution branch, not a surprise.
 - Naked directional positions usually need explicit TP/SL or equivalent risk logic. Hedged multi-leg strategies need strategy-specific exits instead of cargo-cult TP/SL rules.

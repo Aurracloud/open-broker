@@ -32,7 +32,7 @@ Options (for run):
   --dry              Intercept write methods (no real trades)
   --verbose          Show debug output
   --id <name>        Custom automation ID (default: filename)
-  --poll <ms>        Poll interval in milliseconds (default: 10000)
+  --poll <ms>        REST fallback interval (default: 30000 with WS, 10000 with --no-ws)
   --no-ws            Disable WebSocket; fall back to REST-only polling
   --allow-sleep      Do not request OS idle-sleep inhibition for this run
 

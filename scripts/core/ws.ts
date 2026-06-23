@@ -12,8 +12,9 @@ import type {
   AllDexsAssetCtxsWsEvent,
   AllDexsClearinghouseStateWsEvent,
   SpotStateWsEvent,
+  OpenOrdersWsEvent,
 } from '@nktkas/hyperliquid';
-import type { ClearinghouseState } from './types.js';
+import type { ClearinghouseState, OpenOrder } from './types.js';
 import { isMainnet } from './config.js';
 
 // ── Event types ────────────────────────────────────────────────────
@@ -71,6 +72,8 @@ export interface WsEventMap {
   spotState: {
     balances: Array<{ coin: string; token: number; total: string; hold: string; entryNtl?: string }>;
   };
+  /** Complete open-order snapshot for one user + dex (empty dex = native/main). */
+  openOrders: { user: string; dex: string; orders: OpenOrder[] };
   /** Order status changed (filled, canceled, rejected, etc.) */
   orderUpdate: {
     order: {
@@ -136,6 +139,7 @@ export class WebSocketManager {
   private subscriptions: ISubscription[] = [];
   private handlers = new Map<WsEventType, Set<Function>>();
   private _connected = false;
+  private closing = false;
   private verbose: boolean;
 
   constructor(verbose = false) {
@@ -158,17 +162,38 @@ export class WebSocketManager {
     this.transport = new WebSocketTransport({
       isTestnet: !isMainnet(),
       resubscribe: true, // auto-resubscribe on reconnect
+      reconnect: { maxRetries: Infinity },
+    });
+
+    const socket = this.transport.socket as unknown as WebSocket;
+    socket.addEventListener('open', () => {
+      if (this._connected) return;
+      this._connected = true;
+      this.emit('connected', undefined);
+      this.log('Connected to', isMainnet() ? 'mainnet' : 'testnet');
+    });
+    socket.addEventListener('close', () => {
+      if (!this._connected) return;
+      this._connected = false;
+      this.emit('disconnected', { reason: this.closing ? 'manual close' : 'socket closed' });
+      this.log(this.closing ? 'Closed' : 'Disconnected; transport will reconnect');
+    });
+    socket.addEventListener('error', () => {
+      this.emit('error', { error: new Error('Hyperliquid WebSocket transport error') });
     });
 
     this.client = new SubscriptionClient({ transport: this.transport });
 
     await this.transport.ready();
-    this._connected = true;
-    this.emit('connected', undefined);
-    this.log('Connected to', isMainnet() ? 'mainnet' : 'testnet');
+    if (!this._connected) {
+      this._connected = true;
+      this.emit('connected', undefined);
+      this.log('Connected to', isMainnet() ? 'mainnet' : 'testnet');
+    }
   }
 
   async close(): Promise<void> {
+    this.closing = true;
     for (const sub of this.subscriptions) {
       try { await sub.unsubscribe(); } catch { /* ignore */ }
     }
@@ -180,9 +205,12 @@ export class WebSocketManager {
       this.client = null;
     }
 
-    this._connected = false;
-    this.emit('disconnected', { reason: 'manual close' });
-    this.log('Closed');
+    if (this._connected) {
+      this._connected = false;
+      this.emit('disconnected', { reason: 'manual close' });
+      this.log('Closed');
+    }
+    this.closing = false;
   }
 
   // ── Event system ───────────────────────────────────────────────
@@ -304,6 +332,19 @@ export class WebSocketManager {
     return this.trackSub(sub);
   }
 
+  /** Subscribe to complete open-order snapshots for one dex. */
+  async subscribeOpenOrders(user: `0x${string}`, dex = ''): Promise<ISubscription> {
+    const client = this.ensureClient();
+    const sub = await client.openOrders({ user, dex }, (data: OpenOrdersWsEvent) => {
+      this.emit('openOrders', {
+        user: data.user,
+        dex: data.dex,
+        orders: data.orders as unknown as OpenOrder[],
+      });
+    });
+    return this.trackSub(sub);
+  }
+
   /**
    * Subscribe to order lifecycle events (fill, cancel, reject, etc.).
    * This is the most important subscription for trading automations.
@@ -377,16 +418,24 @@ export class WebSocketManager {
   /**
    * Start all subscriptions needed for the automation runtime:
    * - allMids (price feed)
+   * - allDexsAssetCtxs (funding / mark / oracle contexts)
+   * - allDexsClearinghouseState + spotState (positions, margin, balances)
+   * - openOrders for main + requested HIP-3 dexes
    * - orderUpdates (order lifecycle)
    * - userFills (trade fills)
    * - userEvents (liquidations, funding payments, system cancels)
    */
-  async subscribeAll(user: `0x${string}`): Promise<void> {
+  async subscribeAll(user: `0x${string}`, dexNames: string[] = []): Promise<void> {
     await this.connect();
     this.log('Subscribing to all feeds for', user);
 
     await Promise.all([
       this.subscribeAllMids(),
+      this.subscribeAllDexsAssetCtxs(),
+      this.subscribeAllDexsClearinghouseState(user),
+      this.subscribeSpotState(user),
+      this.subscribeOpenOrders(user),
+      ...dexNames.map((dex) => this.subscribeOpenOrders(user, dex)),
       this.subscribeOrderUpdates(user),
       this.subscribeUserFills(user),
       this.subscribeUserEvents(user),

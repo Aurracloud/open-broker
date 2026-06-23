@@ -764,6 +764,22 @@ openbroker approve-builder --max-fee "0.05%"  # Custom max fee
 | `--builder` | Custom builder address (advanced) | Open Broker |
 | `--verbose` | Show debug output | — |
 
+## Automation Runtime
+
+Run audited TypeScript automations with required runtime guardrails:
+
+```bash
+openbroker auto run ./my-automation.ts --id my-auto --set coin=HYPE
+```
+
+WebSocket mode is enabled by default. Before an automation's `onStart` hooks run, OpenBroker subscribes to live mids, all-dex asset contexts, all-dex account state, spot balances, per-dex open-order snapshots, order updates, fills, and user events. L2 books are subscribed lazily per requested coin.
+
+Existing strategies continue to use `api.client`. Inside the automation runtime, `getAllMids()`, `getMetaAndAssetCtxs()`, `getUserState()`, `getUserStateAll()`, `getSpotBalances()`, `getOpenOrders()`, and `getL2Book()` read the live WebSocket cache first and automatically fall back to REST when the socket is unavailable or a feed has not seeded. `getPredictedFundings()` has no socket equivalent, so it is request-de-duplicated, cached for 60 seconds, and serves the last successful value through transient rate limits.
+
+`api.every(intervalMs, handler)` uses an independent scheduler and does not trigger a REST snapshot. `--poll` controls the disconnected REST fallback cadence; while WebSocket is healthy, full REST reconciliation runs no more than once per minute even when an older launch command passes a shorter value such as `--poll 5000`. Use `--no-ws` only when you intentionally need REST-only behavior.
+
+Every automation must export `guardrails` plus its default factory. See [SKILL.md](./SKILL.md) for the complete schema, WebSocket event model, and runtime enforcement rules.
+
 ## OpenClaw Plugin
 
 OpenBroker ships as an [OpenClaw](https://openclaw.ai) plugin. When installed via OpenClaw, it registers structured agent tools and a background position watcher — no Bash wrappers needed.

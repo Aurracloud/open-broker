@@ -4,13 +4,13 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import path from 'path';
 import os from 'os';
-import { getClient } from '../core/client.js';
-import type { HyperliquidClient } from '../core/client.js';
+import { HyperliquidClient } from '../core/client.js';
 import {
   roundPrice, roundSize, sleep, normalizeCoin,
   formatUsd, formatPercent, annualizeFundingRate,
 } from '../core/utils.js';
 import { WebSocketManager } from '../core/ws.js';
+import { AutomationRealtimeData } from './realtime.js';
 import { AutomationEventBus } from './events.js';
 import { loadAutomation } from './loader.js';
 import { CLIENT_WRITE_METHODS, createGuardrailedClient } from './guardrails.js';
@@ -433,9 +433,9 @@ export interface RuntimeOptions {
   /** Pre-seed state before the factory function runs (e.g. from --set key=value) */
   initialState?: Record<string, unknown>;
   /**
-   * Enable WebSocket for real-time events (allMids, orderUpdates, userFills, userEvents).
-   * When enabled, REST polling interval is relaxed to a heartbeat (default 60s).
-   * Falls back gracefully to polling if WebSocket connection fails.
+   * Enable WebSocket-first market/account data and events. REST is used for
+   * initial static metadata, minute reconciliation, and automatic fallback
+   * while the socket is unavailable.
    * @default true
    */
   useWebSocket?: boolean;
@@ -471,8 +471,8 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
     useWebSocket = true,
   } = options;
 
-  // When WebSocket is enabled, REST poll becomes a heartbeat (30s default)
-  // When disabled, use the original 10s polling interval
+  // This is the disconnected REST fallback cadence. While WebSocket is live,
+  // reconciliation is clamped to at least 60 seconds below.
   const pollIntervalMs = options.pollIntervalMs ?? (useWebSocket ? 30_000 : 10_000);
 
   const id = options.id || path.basename(scriptPath, '.ts');
@@ -492,7 +492,10 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
 
   const eventBus = new AutomationEventBus();
 
-  const rawClient = getClient();
+  // Each automation owns its client + realtime cache. This prevents one run
+  // from replacing or detaching another run's WebSocket provider when several
+  // automations share a host process.
+  const rawClient = new HyperliquidClient();
   const audit = createAutomationAudit({
     automationId: id,
     scriptPath,
@@ -572,7 +575,7 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
     client,
     utils: { roundPrice, roundSize, sleep, normalizeCoin, formatUsd, formatPercent, annualizeFundingRate },
     on: (event, handler) => eventBus.on(event, handler),
-    every: (intervalMs, handler) => scheduledTasks.push({ intervalMs, handler, lastRun: 0 }),
+    every: (intervalMs, handler) => scheduledTasks.push({ intervalMs, handler, lastRun: Date.now() }),
     onStart: (handler) => startHooks.push(handler),
     onStop: (handler) => stopHooks.push(handler),
     onError: (handler) => errorHooks.push(handler),
@@ -588,15 +591,6 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
   try {
     // Execute the already validated factory function (registers handlers).
     await loaded.factory(api);
-
-    // Call onStart hooks
-    for (const hook of startHooks) {
-      try { await hook(); } catch (err) {
-        const error = err instanceof Error ? err : new Error(String(err));
-        audit.recordError('onStart', error);
-        log.error(`onStart hook error: ${error.message}`);
-      }
-    }
   } catch (err) {
     const error = err instanceof Error ? err : new Error(String(err));
     audit.recordError('startup', error);
@@ -616,6 +610,7 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
   let eventsEmitted = 0;
   let isPolling = false;
   let stopped = false;
+  let automationReady = false;
 
   async function handleErrors(errors: Error[]) {
     for (const err of errors) {
@@ -647,12 +642,26 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
   // ── WebSocket setup ─────────────────────────────────────────────
   let ws: WebSocketManager | null = null;
   let wsConnected = false;
+  let realtimeData: AutomationRealtimeData | null = null;
   // Track latest prices from WebSocket for real-time price_change events
   let wsPrices = new Map<string, number>();
+  let wsFundingRates = new Map<string, number>();
 
   if (useWebSocket) {
     try {
       ws = new WebSocketManager(verbose);
+      const unified = await rawClient.isUnifiedAccount().catch(() => null);
+      const orderDexes = await rawClient.getPerpDexs()
+        .then((dexes) => dexes.slice(1).flatMap((dex) => dex?.name ? [dex.name] : []))
+        .catch(() => [] as string[]);
+      realtimeData = new AutomationRealtimeData(
+        ws,
+        rawClient,
+        rawClient.address,
+        unified,
+        orderDexes,
+      );
+      rawClient.setRealtimeDataProvider(realtimeData);
 
       // Wire WebSocket events to the automation event bus
       ws.on('allMids', ({ mids }) => {
@@ -663,12 +672,28 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
           const oldPrice = wsPrices.get(coin);
           wsPrices.set(coin, newPrice);
 
-          if (oldPrice !== undefined && oldPrice !== 0 && eventBus.has('price_change')) {
+          if (automationReady && oldPrice !== undefined && oldPrice !== 0 && eventBus.has('price_change')) {
             const changePct = ((newPrice - oldPrice) / oldPrice) * 100;
             if (Math.abs(changePct) >= 0.01) {
               void emitAutomationEvent('price_change', { coin, oldPrice, newPrice, changePct }, 'ws');
             }
           }
+        }
+      });
+
+      ws.on('allDexsAssetCtxs', ({ ctxs }) => {
+        if (!automationReady || !eventBus.has('funding_update')) return;
+        const next = rawClient.fundingRatesFromWs(ctxs);
+        for (const [coin, data] of next) {
+          const previous = wsFundingRates.get(coin);
+          wsFundingRates.set(coin, data.rate);
+          if (previous === undefined || previous === data.rate) continue;
+          void emitAutomationEvent('funding_update', {
+            coin,
+            fundingRate: data.rate,
+            annualized: annualizeFundingRate(data.rate),
+            premium: data.premium,
+          }, 'ws');
         }
       });
 
@@ -685,7 +710,7 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
           raw: update,
         });
 
-        if (eventBus.has('order_update')) {
+        if (automationReady && eventBus.has('order_update')) {
           void emitAutomationEvent('order_update', {
             coin: update.order.coin,
             oid: update.order.oid,
@@ -729,7 +754,7 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
         // Fee is converted to USD using feeToken: for non-USDC fees (spot
         // buys pay in the received asset), fee × price yields USD since the
         // fee token is the base of the traded pair and `price` is quote/base.
-        if (eventBus.has('order_filled')) {
+        if (automationReady && eventBus.has('order_filled')) {
           const size = parseFloat(fill.sz);
           const price = parseFloat(fill.px);
           const rawFee = parseFloat(fill.fee);
@@ -762,7 +787,7 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
       ws.on('userEvent', (event) => {
         audit.recordUserEvent(event);
         // Handle liquidation events — only available through WebSocket
-        if ('liquidation' in event && eventBus.has('liquidation')) {
+        if (automationReady && 'liquidation' in event && eventBus.has('liquidation')) {
           const liq = event.liquidation;
           void emitAutomationEvent('liquidation', {
             lid: liq.lid,
@@ -789,10 +814,20 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
         log.info('WebSocket connected — real-time events active');
       });
 
-      // Connect and subscribe
+      // Connect subscriptions and warm only the main static universe in
+      // parallel. HIP-3 metadata is loaded lazily when referenced.
       const userAddress = rawClient.address as `0x${string}`;
-      await ws.subscribeAll(userAddress);
-      log.info('WebSocket subscriptions active (allMids, orderUpdates, userFills, userEvents)');
+      await Promise.all([
+        ws.subscribeAll(userAddress, orderDexes),
+        rawClient.initializeRealtimeMetadata().catch((error) => {
+          log.warn(`Realtime metadata warmup failed: ${error instanceof Error ? error.message : String(error)}; REST fallback remains available`);
+        }),
+      ]);
+      const seeded = await realtimeData.waitUntilReady();
+      const readiness = realtimeData.readinessSummary();
+      log.info(
+        `WebSocket subscriptions active (mids, asset contexts, account state, spot state, orders, fills, user events)${seeded ? '' : ` · initial snapshots incomplete; REST fallback armed · openOrders ${readiness.seededOrderDexes}/${readiness.expectedOrderDexes}`}`,
+      );
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
       audit.recordError('websocket_setup', error);
@@ -800,6 +835,8 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
         log.debug(`WebSocket setup stack: ${error.stack}`);
       }
       log.warn(`WebSocket setup failed: ${error.message} — using REST polling only`);
+      rawClient.setRealtimeDataProvider(null);
+      realtimeData = null;
       ws = null;
       wsConnected = false;
     }
@@ -839,7 +876,7 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
         }
 
         // Funding updates
-        if (eventBus.has('funding_update')) {
+        if (eventBus.has('funding_update') && !wsConnected) {
           for (const [coin, data] of snapshot.fundingRates) {
             await emitAutomationEvent('funding_update', {
               coin,
@@ -926,21 +963,6 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
         // (Skipped for MVP — requires tracking open orders per poll, will add when needed)
       }
 
-      // Run scheduled tasks
-      for (const task of scheduledTasks) {
-        if (now - task.lastRun >= task.intervalMs) {
-          try {
-            await task.handler();
-          } catch (err) {
-            const error = err instanceof Error ? err : new Error(String(err));
-            audit.recordError('scheduled_task', error);
-            log.error(`Scheduled task error: ${error.message}`);
-            await handleErrors([error]);
-          }
-          task.lastRun = now;
-        }
-      }
-
       previousSnapshot = snapshot;
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
@@ -951,19 +973,73 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
     }
   }
 
-  // Start polling
-  const wsLabel = wsConnected ? ', ws=on' : (useWebSocket ? ', ws=failed' : '');
-  log.info(`Started (poll every ${pollIntervalMs / 1000}s, dry=${dryRun}${wsLabel})`);
-  const timer = setInterval(poll, pollIntervalMs);
+  async function runScheduledTasks(): Promise<void> {
+    const now = Date.now();
+    for (const task of scheduledTasks) {
+      if (task.running || now - task.lastRun < task.intervalMs) continue;
+      task.running = true;
+      task.lastRun = now;
+      try {
+        await task.handler();
+      } catch (err) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        audit.recordError('scheduled_task', error);
+        log.error(`Scheduled task error: ${error.message}`);
+        await handleErrors([error]);
+      } finally {
+        task.running = false;
+      }
+    }
+  }
 
-  // Initial poll to seed state
+  // Seed an audit snapshot. With a healthy socket this is assembled from the
+  // live cache; REST is used only for any feed that has not produced its first
+  // snapshot yet.
   await poll();
+
+  // Start hooks run after WebSocket caches are seeded, so strategy reads are
+  // WebSocket-first from their very first decision.
+  for (const hook of startHooks) {
+    try {
+      await hook();
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      audit.recordError('onStart', error);
+      log.error(`onStart hook error: ${error.message}`);
+      for (const errorHook of errorHooks) {
+        try { await errorHook(error); } catch { /* swallow */ }
+      }
+    }
+  }
+  automationReady = true;
+
+  // api.every() is a real scheduler now; it no longer depends on how often a
+  // heavyweight REST reconciliation snapshot runs.
+  const scheduleTimer = setInterval(() => { void runScheduledTasks(); }, 500);
+
+  // --poll controls the REST fallback cadence while the socket is down. While
+  // connected, reconcile at most once per minute regardless of a shorter
+  // fallback interval supplied by older launch commands.
+  const restReconcileMs = Math.max(60_000, pollIntervalMs);
+  let lastPollAt = Date.now();
+  const pollTimer = setInterval(() => {
+    const interval = wsConnected ? restReconcileMs : pollIntervalMs;
+    if (Date.now() - lastPollAt < interval) return;
+    lastPollAt = Date.now();
+    void poll();
+  }, Math.min(1_000, pollIntervalMs));
+
+  const wsLabel = wsConnected ? ', ws=on' : (useWebSocket ? ', ws=failed' : '');
+  log.info(
+    `Started (REST fallback ${pollIntervalMs / 1000}s, connected reconcile ${restReconcileMs / 1000}s, dry=${dryRun}${wsLabel})`,
+  );
 
   // Stop function
   async function stop(opts?: { persist?: boolean }) {
     if (stopped) return;
     stopped = true;
-    clearInterval(timer);
+    clearInterval(scheduleTimer);
+    clearInterval(pollTimer);
 
     // Close WebSocket
     if (ws) {
@@ -971,6 +1047,8 @@ export async function startAutomation(options: RuntimeOptions): Promise<RunningA
       await ws.close();
       ws = null;
     }
+    rawClient.setRealtimeDataProvider(null);
+    realtimeData = null;
 
     for (const hook of stopHooks) {
       try { await hook(); } catch (err) {

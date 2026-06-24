@@ -301,7 +301,7 @@ Use `--no-ws` only for debugging or networks that cannot maintain WebSockets. In
 `openbroker-monitoring` is optional but useful for long-running automations, live debugging, and post-run inspection.
 
 ```bash
-npm install openbroker-monitoring
+openbroker install monitoring
 openbroker auto run ./my-automation.ts --id my-auto
 openbroker-monitoring serve --host 127.0.0.1 --port 3001
 ```

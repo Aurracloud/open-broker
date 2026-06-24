@@ -2,6 +2,11 @@
 
 All notable changes to Open Broker will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- Added an allowlisted `openbroker install <package>` command for optional companion packages, initially supporting `monitoring` (`openbroker-monitoring`) and `extended` (`openbroker-extended`). Re-running installs the latest release; `--tag`, `--dry`, and `--list` are supported.
+
 ## [1.9.3] - 2026-06-23
 
 ### Changed

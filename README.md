@@ -8,6 +8,18 @@ Hyperliquid trading CLI. Execute orders, manage positions, and run trading strat
 npm install -g openbroker
 ```
 
+### Companion packages
+
+OpenBroker manages optional, allowlisted companion packages through the same CLI:
+
+```bash
+openbroker install --list        # Show supported packages
+openbroker install monitoring    # Local automation dashboard
+openbroker install extended      # Extended Exchange CLI
+```
+
+The command installs globally through npm so each package's executable is available on your `PATH`. Re-run the same command to upgrade to the latest release, or pin a release with `--tag <version>`. Use `--dry` to preview the npm command.
+
 ### Codex: one-command install
 
 Install the Codex skill, persistent CLI, and restricted API-wallet onboarding flow:
@@ -38,6 +50,9 @@ openbroker search --query GOLD              # Find markets
 
 ```bash
 npx openbroker@latest install --codex  # Codex skill + CLI + API-wallet onboarding
+openbroker install --list       # List optional companion packages
+openbroker install monitoring   # Install or upgrade openbroker-monitoring
+openbroker install extended     # Install or upgrade openbroker-extended
 openbroker setup --api-wallet   # Recommended: restricted agent wallet + browser approval
 openbroker setup                # Interactive; API wallet is the default
 ```

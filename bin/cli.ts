@@ -11,7 +11,7 @@ const scriptsDir = path.resolve(__dirname, '../scripts');
 
 const commands: Record<string, { script: string; description: string }> = {
   // Setup
-  'install': { script: 'setup/install.ts', description: 'Install OpenBroker for an agent harness' },
+  'install': { script: 'setup/install.ts', description: 'Install companion packages or an agent harness' },
   'setup': { script: 'setup/onboard.ts', description: 'Interactive setup wizard' },
   'onboard': { script: 'setup/onboard.ts', description: 'Interactive setup wizard' },
   'approve-builder': { script: 'setup/approve-builder.ts', description: 'Approve builder fee' },
@@ -69,7 +69,7 @@ Open Broker - Hyperliquid Trading CLI
 Usage: openbroker <command> [options]
 
 Setup:
-  install              Install OpenBroker for Codex or another agent harness
+  install              Install companion packages or OpenBroker for an agent harness
   setup                One-command setup (wallet + config + builder approval)
 
 Info Commands:
@@ -139,6 +139,8 @@ Utility:
 
 Examples:
   npx openbroker@latest install --codex        # Install skill + CLI + API-wallet setup
+  openbroker install monitoring                 # Install or upgrade the automation dashboard
+  openbroker install extended                   # Install or upgrade the Extended Exchange CLI
   openbroker setup --api-wallet                 # Recommended restricted API-wallet setup
   openbroker account                            # View account info
   openbroker buy --coin ETH --size 0.1          # Market buy 0.1 ETH

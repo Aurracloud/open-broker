@@ -162,7 +162,7 @@ Shared perp order flags:
 | `twap-cancel` | Stop a TWAP | `--coin`, `--twap-id` |
 | `twap-status` | Inspect TWAPs | `--active` |
 | `scale` | Multi-level ladder | `--levels`, `--range`, `--distribution linear|exponential|flat`, `--tif` |
-| `bracket` | Entry + TP + SL | `--entry market|limit`, `--price`, `--tp`, `--sl` |
+| `bracket` | Entry + linked TP/SL | `--entry market|limit`, `--price`, `--tp`, `--sl`, `--entry-timeout`, `--sl-slippage` |
 | `chase` | Repriced ALO order | `--offset`, `--timeout`, `--interval`, `--max-chase` |
 
 ## High-signal workflows
@@ -331,7 +331,7 @@ Additional practical caveats:
 - Positive-funding carry and negative-funding carry are not automatically symmetric. If the hedge requires short spot and the client/runtime cannot express that safely, do not invent an unhedged mirror trade.
 - `funding_update` is emitted from changed WebSocket asset contexts and may cover many assets; filter by coin early.
 - Dust matters: if residual size falls below exchange precision or `minTradeUsd`, stop chasing it.
-- `ALO` / post-only orders can be rejected when they would cross; treat that as an execution branch, not a surprise.
+- `ALO` / post-only orders can be rejected when they would cross; treat that as an execution branch, not a surprise. For chase-style execution, track fills from `userFills` and requote only the remaining size.
 - Naked directional positions usually need explicit TP/SL or equivalent risk logic. Hedged multi-leg strategies need strategy-specific exits instead of cargo-cult TP/SL rules.
 - For new automations, do a dry run, inspect `auto report`, and only then run live unless the user explicitly requested immediate live execution.
 

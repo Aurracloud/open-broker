@@ -511,7 +511,7 @@ openbroker twap-status --active     # Only running TWAPs
 
 #### `scale` — Scale In/Out
 
-Place a grid of limit orders to scale into or out of a position. Three distribution modes control how size is allocated across price levels.
+Place a grid of limit orders to scale into or out of a position. Three distribution modes control how size is allocated across price levels. The ladder is submitted as a bulk order; if any level fails while others rest, the CLI cancels the resting ladder orders to avoid leaving an accidental partial grid.
 
 ```bash
 openbroker scale --coin ETH --side buy --size 1 --levels 5 --range 2
@@ -534,7 +534,7 @@ openbroker scale --coin BTC --side sell --size 0.5 --levels 4 --range 3 --reduce
 
 #### `bracket` — Bracket Order (Entry + TP + SL)
 
-Complete trade setup in one command. Supports market or limit entry with automatic take-profit and stop-loss trigger orders.
+Complete trade setup in one command. Supports market or limit entry with linked take-profit and stop-loss trigger orders. Limit entries wait for fill confirmation before arming TP/SL; if the wait times out, the entry can remain resting without unfilled protection orders.
 
 ```bash
 openbroker bracket --coin ETH --side buy --size 0.5 --tp 3 --sl 1.5
@@ -551,10 +551,12 @@ openbroker bracket --coin BTC --side sell --size 0.1 --entry limit --price 10000
 | `--entry` | Entry type: `market` or `limit` | `market` |
 | `--price` | Entry price (required if `--entry limit`) | — |
 | `--slippage` | Slippage for market entry in bps | `50` |
+| `--entry-timeout` | Seconds to wait for limit-entry fill confirmation before returning | `300` |
+| `--sl-slippage` | Stop-loss trigger limit slippage in bps | `100` |
 | `--dry` | Show bracket plan without executing | — |
 | `--verbose` | Show debug output | — |
 
-Executes in 3 steps: Entry → TP trigger → SL trigger. Shows risk/reward ratio and potential profit/loss.
+Executes in 2 steps: Entry → linked TP/SL trigger pair. Market entries use the exchange response for fill size; limit entries use the user fills stream with REST fallback to confirm filled size before protection is armed.
 
 #### `chase` — Chase Order
 
@@ -579,7 +581,7 @@ openbroker chase --coin BTC --side sell --size 0.1 --offset 2 --timeout 600
 | `--dry` | Show chase parameters without executing | — |
 | `--verbose` | Show debug output | — |
 
-Uses ALO orders exclusively, guaranteeing maker rebates. Stops when filled, timed out, or max chase reached.
+Uses ALO orders exclusively, guaranteeing maker rebates. Fill progress is tracked from user fill events with REST fallback, so partial fills reduce the next requote size. Stops when filled, timed out, or max chase reached.
 
 ---
 

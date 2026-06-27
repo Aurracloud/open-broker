@@ -3,7 +3,9 @@
 
 import { fileURLToPath } from 'url';
 import { getClient } from '../core/client.js';
+import type { OrderResponse, CancelResponse, OpenOrder } from '../core/types.js';
 import { formatUsd, parseArgs, sleep } from '../core/utils.js';
+import { UserFillWatcher, type FillWatcher } from './execution.js';
 
 function printUsage() {
   console.log(`
@@ -49,8 +51,20 @@ export interface ChaseOptions {
   reduceOnly?: boolean;
   dryRun?: boolean;
   verbose?: boolean;
+  client?: ChaseClient;
+  fillWatcher?: FillWatcher;
   /** Receives each output line. Defaults to console.log. */
   output?: (line: string) => void;
+}
+
+export interface ChaseClient {
+  verbose: boolean;
+  address: string;
+  getAllMids(): Promise<Record<string, string>>;
+  getOpenOrders(): Promise<OpenOrder[]>;
+  getUserFills(user?: string): Promise<Array<{ coin: string; px: string; sz: string; time: number; oid: number }>>;
+  limitOrder(coin: string, isBuy: boolean, size: number, price: number, tif?: 'Gtc' | 'Ioc' | 'Alo', reduceOnly?: boolean, leverage?: number): Promise<OrderResponse>;
+  cancel(coin: string, oid: number): Promise<CancelResponse>;
 }
 
 export interface ChaseResult {
@@ -70,8 +84,12 @@ export async function runChase(opts: ChaseOptions): Promise<ChaseResult> {
   const isBuy = opts.side === 'buy';
 
   if (opts.size <= 0 || isNaN(opts.size)) throw new Error('size must be positive');
+  if (offsetBps < 0 || !Number.isFinite(offsetBps)) throw new Error('offsetBps must be non-negative');
+  if (timeoutSec <= 0 || !Number.isFinite(timeoutSec)) throw new Error('timeoutSec must be positive');
+  if (intervalMs <= 0 || !Number.isFinite(intervalMs)) throw new Error('intervalMs must be positive');
+  if (maxChaseBps <= 0 || !Number.isFinite(maxChaseBps)) throw new Error('maxChaseBps must be positive');
 
-  const client = getClient();
+  const client = opts.client ?? getClient();
   if (opts.verbose) client.verbose = true;
 
   out('Open Broker - Chase Order');
@@ -107,49 +125,34 @@ export async function runChase(opts: ChaseOptions): Promise<ChaseResult> {
   const startTime = Date.now();
   let currentOid: number | null = null;
   let lastPrice: number | null = null;
+  let remainingSize = opts.size;
   let iteration = 0;
   let filled = false;
   let exitReason: 'filled' | 'timeout' | 'max_chase_exceeded' = 'timeout';
+  const accountedFills = new Map<number, number>();
+  const ownsFillWatcher = !opts.fillWatcher;
+  const fillWatcher = opts.fillWatcher ?? new UserFillWatcher(client, { sinceMs: startTime });
 
-  while (Date.now() - startTime < timeoutSec * 1000) {
-    iteration++;
-
-    const currentMids = await client.getAllMids();
-    const currentMid = parseFloat(currentMids[opts.coin]);
-
-    if (isBuy && currentMid > maxChasePrice) {
-      out(`\n⚠️ Price ${formatUsd(currentMid)} exceeded max chase ${formatUsd(maxChasePrice)}`);
-      exitReason = 'max_chase_exceeded';
-      break;
+  const applyFills = (oid: number): number => {
+    const totalFilled = fillWatcher.getFilled(oid).size;
+    const alreadyAccounted = accountedFills.get(oid) ?? 0;
+    const delta = Math.max(0, totalFilled - alreadyAccounted);
+    if (delta > 0) {
+      remainingSize = Math.max(0, remainingSize - delta);
+      accountedFills.set(oid, totalFilled);
     }
-    if (!isBuy && currentMid < maxChasePrice) {
-      out(`\n⚠️ Price ${formatUsd(currentMid)} exceeded max chase ${formatUsd(maxChasePrice)}`);
-      exitReason = 'max_chase_exceeded';
-      break;
-    }
+    return delta;
+  };
 
-    const orderPrice = isBuy
-      ? currentMid * (1 - offsetBps / 10000)
-      : currentMid * (1 + offsetBps / 10000);
+  await fillWatcher.start();
 
-    const priceChanged = !lastPrice || Math.abs(orderPrice - lastPrice) / lastPrice > 0.0001;
+  try {
+    while (Date.now() - startTime < timeoutSec * 1000) {
+      iteration++;
 
-    if (priceChanged) {
       if (currentOid !== null) {
-        try {
-          await client.cancel(opts.coin, currentOid);
-        } catch {
-          // Order might have filled
-        }
-        currentOid = null;
-      }
-
-      const orders = await client.getOpenOrders();
-      const ourOrder = orders.find(o => o.coin === opts.coin && o.oid === currentOid);
-      if (!ourOrder && currentOid !== null) {
-        const state = await client.getUserState();
-        const pos = state.assetPositions.find(p => p.position.coin === opts.coin);
-        if (pos && Math.abs(parseFloat(pos.position.szi)) >= opts.size * 0.99) {
+        applyFills(currentOid);
+        if (remainingSize <= opts.size * 0.001) {
           filled = true;
           exitReason = 'filled';
           out(`\n✅ Order filled!`);
@@ -157,50 +160,123 @@ export async function runChase(opts: ChaseOptions): Promise<ChaseResult> {
         }
       }
 
-      out(`[${iteration}] Mid: ${formatUsd(currentMid)} → Order: ${formatUsd(orderPrice)}...`);
+      const currentMids = await client.getAllMids();
+      const currentMid = parseFloat(currentMids[opts.coin]);
+      if (!currentMid) throw new Error(`No market data for ${opts.coin}`);
 
-      const response = await client.limitOrder(opts.coin, isBuy, opts.size, orderPrice, 'Alo', opts.reduceOnly, opts.leverage);
+      if (isBuy && currentMid > maxChasePrice) {
+        out(`\n⚠️ Price ${formatUsd(currentMid)} exceeded max chase ${formatUsd(maxChasePrice)}`);
+        exitReason = 'max_chase_exceeded';
+        break;
+      }
+      if (!isBuy && currentMid < maxChasePrice) {
+        out(`\n⚠️ Price ${formatUsd(currentMid)} exceeded max chase ${formatUsd(maxChasePrice)}`);
+        exitReason = 'max_chase_exceeded';
+        break;
+      }
 
-      if (response.status === 'ok' && response.response && typeof response.response === 'object') {
-        const status = response.response.data.statuses[0];
-        if (status?.resting) {
-          currentOid = status.resting.oid;
-          lastPrice = orderPrice;
-          out(`OID: ${currentOid}`);
-        } else if (status?.filled) {
+      const orderPrice = isBuy
+        ? currentMid * (1 - offsetBps / 10000)
+        : currentMid * (1 + offsetBps / 10000);
+
+      const priceChanged = !lastPrice || Math.abs(orderPrice - lastPrice) / lastPrice > 0.0001;
+
+      if (priceChanged) {
+        if (currentOid !== null) {
+          applyFills(currentOid);
+          if (remainingSize <= opts.size * 0.001) {
+            filled = true;
+            exitReason = 'filled';
+            out(`\n✅ Order filled!`);
+            break;
+          }
+          try {
+            await client.cancel(opts.coin, currentOid);
+          } catch {
+            // Order might have filled between the fill check and cancel.
+          }
+          applyFills(currentOid);
+          currentOid = null;
+        }
+
+        if (remainingSize <= opts.size * 0.001) {
           filled = true;
           exitReason = 'filled';
-          out(`✅ Filled @ ${formatUsd(parseFloat(status.filled.avgPx))}`);
+          out(`\n✅ Order filled!`);
           break;
-        } else if (status?.error) {
-          out(`❌ ${status.error}`);
+        }
+
+        out(`[${iteration}] Mid: ${formatUsd(currentMid)} → Order: ${formatUsd(orderPrice)} x ${remainingSize.toFixed(6)}...`);
+
+        const response = await client.limitOrder(opts.coin, isBuy, remainingSize, orderPrice, 'Alo', opts.reduceOnly, opts.leverage);
+
+        if (response.status === 'ok' && response.response && typeof response.response === 'object') {
+          const status = response.response.data.statuses[0];
+          if (status?.resting) {
+            currentOid = status.resting.oid;
+            lastPrice = orderPrice;
+            out(`OID: ${currentOid}`);
+          } else if (status?.filled) {
+            const totalSz = parseFloat(status.filled.totalSz);
+            remainingSize = Math.max(0, remainingSize - totalSz);
+            out(`✅ Filled ${totalSz} @ ${formatUsd(parseFloat(status.filled.avgPx))}`);
+            if (remainingSize <= opts.size * 0.001) {
+              filled = true;
+              exitReason = 'filled';
+              break;
+            }
+          } else if (status?.error) {
+            out(`❌ ${status.error}`);
+          }
+        } else {
+          out(`❌ Failed`);
         }
       } else {
-        out(`❌ Failed`);
-      }
-    } else {
-      if (currentOid !== null) {
-        const orders = await client.getOpenOrders();
-        const ourOrder = orders.find(o => o.oid === currentOid);
-        if (!ourOrder) {
-          filled = true;
-          exitReason = 'filled';
-          out(`\n✅ Order filled!`);
-          break;
+        if (currentOid !== null) {
+          await fillWatcher.waitForFill(currentOid, remainingSize, intervalMs, { coin: opts.coin, pollMs: intervalMs });
+          applyFills(currentOid);
+          if (remainingSize <= opts.size * 0.001) {
+            filled = true;
+            exitReason = 'filled';
+            out(`\n✅ Order filled!`);
+            break;
+          }
+
+          const orders = await client.getOpenOrders();
+          const ourOrder = orders.find(o => o.oid === currentOid);
+          if (!ourOrder) {
+            applyFills(currentOid);
+            if (remainingSize <= opts.size * 0.001) {
+              filled = true;
+              exitReason = 'filled';
+              out(`\n✅ Order filled!`);
+              break;
+            }
+            currentOid = null;
+            lastPrice = null;
+          }
         }
       }
-    }
 
-    await sleep(intervalMs);
+      await sleep(intervalMs);
+    }
+  } finally {
+    if (ownsFillWatcher) await fillWatcher.stop();
   }
 
   if (currentOid !== null && !filled) {
+    applyFills(currentOid);
     out(`\nCancelling unfilled order...`);
     try {
       await client.cancel(opts.coin, currentOid);
       out(`✅ Cancelled`);
     } catch {
       out(`⚠️ Could not cancel (may have filled)`);
+    }
+    applyFills(currentOid);
+    if (remainingSize <= opts.size * 0.001) {
+      filled = true;
+      exitReason = 'filled';
     }
   }
 
@@ -213,6 +289,7 @@ export async function runChase(opts: ChaseOptions): Promise<ChaseResult> {
   out(`Iterations:   ${iteration}`);
   out(`Start Mid:    ${formatUsd(startMid)}`);
   out(`End Mid:      ${formatUsd(endMid)} (${priceMove >= 0 ? '+' : ''}${priceMove.toFixed(1)} bps)`);
+  out(`Filled Size:  ${(opts.size - remainingSize).toFixed(6)} / ${opts.size}`);
   out(`Result:       ${filled ? '✅ Filled' : '❌ Not filled'}`);
 
   return { status: exitReason, iterations: iteration, durationSec: elapsed, startMid, endMid };

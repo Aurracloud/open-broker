@@ -51,10 +51,11 @@
     "funding-scan": "tsx scripts/info/funding-scan.ts",
     "outcomes": "tsx scripts/info/outcomes.ts",
     "build": "tsc",
-    "prepublishOnly": "npm run build && npm run test:guardrails && npm run test:realtime && npm run test:install && npm run test:cli",
+    "prepublishOnly": "npm run build && npm run test:guardrails && npm run test:realtime && npm run test:advanced && npm run test:install && npm run test:cli",
     "test:cli": "node --import tsx bin/cli.ts --help",
     "test:guardrails": "node --import tsx --test scripts/auto/guardrails.test.ts",
     "test:realtime": "node --import tsx --test scripts/auto/realtime.test.ts",
+    "test:advanced": "node --import tsx --test scripts/operations/advanced-orders.test.ts",
     "test:install": "node --import tsx --test scripts/setup/package-catalog.test.ts"
   },
   "dependencies": {

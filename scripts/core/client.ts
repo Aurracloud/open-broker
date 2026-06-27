@@ -2703,6 +2703,97 @@ export class HyperliquidClient {
     return this.triggerOrder(coin, isBuy, size, triggerPrice, triggerPrice, 'tp', true);
   }
 
+  /**
+   * Place a paired TP/SL trigger set using Hyperliquid's normalTpsl grouping.
+   * The two orders are submitted together so the venue treats them as a linked
+   * bracket pair instead of two unrelated reduce-only triggers.
+   */
+  async tpslPair(
+    coin: string,
+    isBuy: boolean,
+    size: number,
+    takeProfitPrice: number,
+    stopLossPrice: number,
+    stopLossSlippageBps: number = 100,
+    leverage?: number
+  ): Promise<OrderResponse> {
+    await this.requireTrading();
+    await this.getMetaAndAssetCtxs();
+
+    if (leverage && !this.isHip3(coin)) {
+      this.log(`Setting leverage for ${coin} to ${leverage}x cross`);
+      await this.updateLeverage(coin, leverage, true);
+    }
+
+    const slippageMult = stopLossSlippageBps / 10000;
+    const stopLossLimitPrice = isBuy
+      ? stopLossPrice * (1 + slippageMult)
+      : stopLossPrice * (1 - slippageMult);
+
+    await this.ensureHip3Ready(coin, size * Math.max(takeProfitPrice, stopLossLimitPrice), leverage);
+
+    const assetIndex = this.getAssetIndex(coin);
+    const szDecimals = this.getSzDecimals(coin);
+    const roundedSize = roundSize(size, szDecimals);
+
+    const orderWires = [
+      {
+        a: assetIndex,
+        b: isBuy,
+        p: roundPrice(takeProfitPrice, szDecimals),
+        s: roundedSize,
+        r: true,
+        t: {
+          trigger: {
+            triggerPx: roundPrice(takeProfitPrice, szDecimals),
+            isMarket: false,
+            tpsl: 'tp' as const,
+          },
+        },
+      },
+      {
+        a: assetIndex,
+        b: isBuy,
+        p: roundPrice(stopLossLimitPrice, szDecimals),
+        s: roundedSize,
+        r: true,
+        t: {
+          trigger: {
+            triggerPx: roundPrice(stopLossPrice, szDecimals),
+            isMarket: false,
+            tpsl: 'sl' as const,
+          },
+        },
+      },
+    ];
+
+    const orderRequest: {
+      orders: typeof orderWires;
+      grouping: 'normalTpsl';
+      builder?: BuilderInfo;
+    } = {
+      orders: orderWires,
+      grouping: 'normalTpsl',
+    };
+
+    if (!this.isTestnet && this.config.builderAddress !== '0x0000000000000000000000000000000000000000') {
+      orderRequest.builder = this.builderInfo;
+      this.log('Including builder fee:', this.builderInfo);
+    }
+
+    try {
+      const response = await this.exchange.order(orderRequest, this.vaultParam);
+      this.log('TP/SL pair response:', JSON.stringify(response, null, 2));
+      return response as unknown as OrderResponse;
+    } catch (error) {
+      this.log('TP/SL pair error:', error);
+      return {
+        status: 'err',
+        response: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
   async cancel(coin: string, oid: number): Promise<CancelResponse> {
     await this.requireTrading();
     await this.getMetaAndAssetCtxs();

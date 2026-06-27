@@ -59,6 +59,9 @@ export type { BracketOptions, BracketResult } from './operations/bracket.js';
 export { runChase } from './operations/chase.js';
 export type { ChaseOptions, ChaseResult } from './operations/chase.js';
 
+export { runScale, calculateLevels } from './operations/scale.js';
+export type { ScaleOptions, ScaleResult, OrderLevel } from './operations/scale.js';
+
 // ── Automation runtime ──────────────────────────────────────────────
 
 export {

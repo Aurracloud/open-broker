@@ -37,7 +37,7 @@ command -v openbroker
 openbroker --version
 ```
 
-Require OpenBroker 1.9.1 or newer. When the user explicitly asks to set up OpenBroker, install or upgrade the CLI as part of that request, using the normal approval flow for global or network writes:
+Require OpenBroker 1.10.0 or newer (earlier versions lack the current TP/SL and bracket flags documented here). When the user explicitly asks to set up OpenBroker, install or upgrade the CLI as part of that request, using the normal approval flow for global or network writes:
 
 ```bash
 npm install -g openbroker@latest
@@ -143,8 +143,8 @@ Shared perp order flags:
 | `buy`, `sell` | Market shortcuts: `openbroker buy --coin ETH --size 0.1` |
 | `market` | Explicit market order with `--side` |
 | `limit` | Add `--price` and optional `--tif GTC|IOC|ALO` |
-| `trigger` | Add `--trigger`, `--type tp|sl`, optional `--limit` |
-| `tpsl` | Protect an existing position with `--tp` and/or `--sl`; accepts absolute, `%`, or `entry` forms |
+| `trigger` | Add `--trigger`, `--type tp|sl`, optional `--limit` and `--exec market|limit` (SL executes as market by default) |
+| `tpsl` | Protect an existing position with `--tp` and/or `--sl`; accepts absolute, `%`, or `entry` forms. Placed as one `positionTpsl` batch: triggers track the position and OCO-cancel each other. `--sl-limit` for a stop-limit SL |
 | `cancel` | `--all`, `--coin`, or `--oid` |
 
 ### Spot and HIP-4 outcome trading
@@ -162,8 +162,17 @@ Shared perp order flags:
 | `twap-cancel` | Stop a TWAP | `--coin`, `--twap-id` |
 | `twap-status` | Inspect TWAPs | `--active` |
 | `scale` | Multi-level ladder | `--levels`, `--range`, `--distribution linear|exponential|flat`, `--tif` |
-| `bracket` | Entry + linked TP/SL | `--entry market|limit`, `--price`, `--tp`, `--sl`, `--entry-timeout`, `--sl-slippage` |
+| `bracket` | Entry + linked TP/SL (one-sided TP-only or SL-only allowed) | `--entry market|limit`, `--price`, `--tp`/`--sl` (% from entry), `--tp-price`/`--sl-price` (absolute), `--sl-slippage`, `--sl-limit`, `--no-atomic`, `--entry-timeout` (only with `--no-atomic`) |
 | `chase` | Repriced ALO order | `--offset`, `--timeout`, `--interval`, `--max-chase` |
+
+TP/SL and execution semantics (v1.10.0+):
+
+- **SL triggers execute as market orders by default.** The fill is capped `--sl-slippage` bps past the trigger (default 100). `--sl-limit` (or `trigger --exec limit`) places a stop-limit instead — warn the user that a gap move past the limit band can skip the stop and leave the position unprotected.
+- **Bracket limit entries are atomic.** Entry + TP/SL go out in one `normalTpsl` batch; the exchange arms the exits when the entry fills, so the bracket survives the CLI exiting. Child statuses `waitingForFill` / `waitingForTrigger` are success states, not errors. With `--no-atomic`, the CLI instead waits up to `--entry-timeout` for the fill, then arms TP/SL sized to the actual filled size.
+- **Market-entry brackets fill first**, then arm TP/SL off the actual average fill price with `positionTpsl` grouping (triggers track the position, OCO between themselves).
+- **Wrong-side triggers are rejected**, not warned: a long TP at or below the live price (or SL at or above it) would fire immediately, so `tpsl` errors out instead of placing it.
+- **$10 exchange minimum pre-checks** (waived for reduce-only): every `scale` level, every `twap` slice (one sub-order per 30s of duration), and the `chase` start size must clear ~$10 notional. Live runs error out; `--dry` shows a warning. A chase whose remainder falls below the minimum stops with status `min_notional`.
+- **`chase` runs client-side** and keeps repricing in the foreground process; keep it running or the resting order stops being managed (it cancels its working order on exit, including on errors). Post-only rejections reprice automatically on the next tick. `twap` is exchange-managed and keeps running after the CLI exits.
 
 ## High-signal workflows
 

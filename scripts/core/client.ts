@@ -19,7 +19,7 @@ import type {
   OutcomeQuestion,
 } from './types.js';
 import { loadConfig, isMainnet } from './config.js';
-import { roundPrice, roundSize } from './utils.js';
+import { MIN_ORDER_NOTIONAL_USD, roundPrice, roundSize } from './utils.js';
 
 export interface RealtimeBookSnapshot {
   coin: string;
@@ -2596,6 +2596,8 @@ export class HyperliquidClient {
    * @param limitPrice - Limit price for the order (use triggerPrice for market-like execution)
    * @param tpsl - 'tp' for take profit, 'sl' for stop loss
    * @param reduceOnly - Whether order is reduce-only (should be true for TP/SL)
+   * @param isMarket - Execute as a market trigger on fire; limitPrice then only
+   *                   caps the fill (slippage band) instead of resting on the book
    */
   async triggerOrder(
     coin: string,
@@ -2605,7 +2607,8 @@ export class HyperliquidClient {
     limitPrice: number,
     tpsl: 'tp' | 'sl',
     reduceOnly: boolean = true,
-    leverage?: number
+    leverage?: number,
+    isMarket: boolean = false
   ): Promise<OrderResponse> {
     await this.requireTrading();
     await this.getMetaAndAssetCtxs();
@@ -2622,9 +2625,8 @@ export class HyperliquidClient {
     const assetIndex = this.getAssetIndex(coin);
     const szDecimals = this.getSzDecimals(coin);
 
-    // For trigger orders, we use the trigger order type
-    // isMarket: false means it becomes a limit order at limitPrice when triggered
-    // For stop loss, we typically want some slippage protection
+    // isMarket: true fires as a market order capped by limitPrice (slippage band);
+    // isMarket: false rests as a limit order at limitPrice once triggered.
     const orderWire = {
       a: assetIndex,
       b: isBuy,
@@ -2634,7 +2636,7 @@ export class HyperliquidClient {
       t: {
         trigger: {
           triggerPx: roundPrice(triggerPrice, szDecimals),
-          isMarket: false,
+          isMarket,
           tpsl,
         },
       },
@@ -2671,23 +2673,30 @@ export class HyperliquidClient {
   }
 
   /**
-   * Place a stop loss order
+   * Place a stop loss order.
+   *
+   * Executes as a market trigger by default: in a gap move that jumps past the
+   * trigger, a stop-limit's band can be skipped entirely and the position sits
+   * unprotected — the exact scenario an SL exists for. The limit price still
+   * caps the fill at `slippageBps` past the trigger. Pass `isMarket: false`
+   * for the stop-limit variant (rests at the band price once triggered).
    */
   async stopLoss(
     coin: string,
     isBuy: boolean,
     size: number,
     triggerPrice: number,
-    slippageBps: number = 100 // 1% slippage for SL execution
+    slippageBps: number = 100, // 1% slippage cap for SL execution
+    isMarket: boolean = true
   ): Promise<OrderResponse> {
-    // For stop loss, limit price should be worse than trigger to ensure fill
+    // Limit price sits worse than trigger to ensure fill
     // Buy SL: limit above trigger, Sell SL: limit below trigger
     const slippageMult = slippageBps / 10000;
     const limitPrice = isBuy
       ? triggerPrice * (1 + slippageMult)
       : triggerPrice * (1 - slippageMult);
 
-    return this.triggerOrder(coin, isBuy, size, triggerPrice, limitPrice, 'sl', true);
+    return this.triggerOrder(coin, isBuy, size, triggerPrice, limitPrice, 'sl', true, undefined, isMarket);
   }
 
   /**
@@ -2704,19 +2713,42 @@ export class HyperliquidClient {
   }
 
   /**
-   * Place a paired TP/SL trigger set using Hyperliquid's normalTpsl grouping.
-   * The two orders are submitted together so the venue treats them as a linked
-   * bracket pair instead of two unrelated reduce-only triggers.
+   * Place TP and/or SL triggers for an open position in one batch.
+   *
+   * Defaults to Hyperliquid's `positionTpsl` grouping: the triggers are tied
+   * to the open position (cancelled when it closes, OCO between themselves)
+   * — the same mechanism the Hyperliquid frontend uses for position TP/SL.
+   * `normalTpsl` is available for a standalone OCO pair not bound to the
+   * position. SL executes as a market trigger by default with the limit price
+   * capping the fill `slSlippageBps` past the trigger (see `stopLoss`).
+   *
+   * `isBuy` is the EXIT side (opposite of the position direction). Statuses
+   * in the response align with the orders sent: TP first (when present),
+   * then SL.
    */
-  async tpslPair(
+  async tpslOrders(
     coin: string,
     isBuy: boolean,
     size: number,
-    takeProfitPrice: number,
-    stopLossPrice: number,
-    stopLossSlippageBps: number = 100,
-    leverage?: number
+    opts: {
+      takeProfitPrice?: number;
+      stopLossPrice?: number;
+      stopLossSlippageBps?: number;
+      /** SL fires as a market trigger (default true); false = stop-limit. */
+      stopLossIsMarket?: boolean;
+      grouping?: 'positionTpsl' | 'normalTpsl';
+      leverage?: number;
+    } = {}
   ): Promise<OrderResponse> {
+    const { takeProfitPrice, stopLossPrice, leverage } = opts;
+    const stopLossSlippageBps = opts.stopLossSlippageBps ?? 100;
+    const stopLossIsMarket = opts.stopLossIsMarket ?? true;
+    const grouping = opts.grouping ?? 'positionTpsl';
+
+    if (takeProfitPrice === undefined && stopLossPrice === undefined) {
+      throw new Error('tpslOrders requires takeProfitPrice, stopLossPrice, or both');
+    }
+
     await this.requireTrading();
     await this.getMetaAndAssetCtxs();
 
@@ -2726,18 +2758,22 @@ export class HyperliquidClient {
     }
 
     const slippageMult = stopLossSlippageBps / 10000;
-    const stopLossLimitPrice = isBuy
-      ? stopLossPrice * (1 + slippageMult)
-      : stopLossPrice * (1 - slippageMult);
+    const stopLossLimitPrice = stopLossPrice === undefined
+      ? undefined
+      : isBuy
+        ? stopLossPrice * (1 + slippageMult)
+        : stopLossPrice * (1 - slippageMult);
 
-    await this.ensureHip3Ready(coin, size * Math.max(takeProfitPrice, stopLossLimitPrice), leverage);
+    const worstPrice = Math.max(takeProfitPrice ?? 0, stopLossLimitPrice ?? 0);
+    await this.ensureHip3Ready(coin, size * worstPrice, leverage);
 
     const assetIndex = this.getAssetIndex(coin);
     const szDecimals = this.getSzDecimals(coin);
     const roundedSize = roundSize(size, szDecimals);
 
-    const orderWires = [
-      {
+    const orderWires = [];
+    if (takeProfitPrice !== undefined) {
+      orderWires.push({
         a: assetIndex,
         b: isBuy,
         p: roundPrice(takeProfitPrice, szDecimals),
@@ -2750,22 +2786,182 @@ export class HyperliquidClient {
             tpsl: 'tp' as const,
           },
         },
-      },
-      {
+      });
+    }
+    if (stopLossPrice !== undefined) {
+      orderWires.push({
         a: assetIndex,
         b: isBuy,
-        p: roundPrice(stopLossLimitPrice, szDecimals),
+        p: roundPrice(stopLossLimitPrice!, szDecimals),
         s: roundedSize,
         r: true,
         t: {
           trigger: {
             triggerPx: roundPrice(stopLossPrice, szDecimals),
-            isMarket: false,
+            isMarket: stopLossIsMarket,
             tpsl: 'sl' as const,
           },
         },
+      });
+    }
+
+    const orderRequest: {
+      orders: typeof orderWires;
+      grouping: 'positionTpsl' | 'normalTpsl';
+      builder?: BuilderInfo;
+    } = {
+      orders: orderWires,
+      grouping,
+    };
+
+    if (!this.isTestnet && this.config.builderAddress !== '0x0000000000000000000000000000000000000000') {
+      orderRequest.builder = this.builderInfo;
+      this.log('Including builder fee:', this.builderInfo);
+    }
+
+    try {
+      const response = await this.exchange.order(orderRequest, this.vaultParam);
+      this.log('TP/SL orders response:', JSON.stringify(response, null, 2));
+      return response as unknown as OrderResponse;
+    } catch (error) {
+      this.log('TP/SL orders error:', error);
+      return {
+        status: 'err',
+        response: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  /**
+   * Place a paired TP/SL trigger set for an open position.
+   *
+   * Back-compat wrapper over `tpslOrders`. Since v1.10.0 this uses the
+   * `positionTpsl` grouping (triggers track the open position and OCO-cancel)
+   * instead of a standalone `normalTpsl` pair, and the SL fires as a market
+   * trigger capped by the slippage band instead of a stop-limit.
+   */
+  async tpslPair(
+    coin: string,
+    isBuy: boolean,
+    size: number,
+    takeProfitPrice: number,
+    stopLossPrice: number,
+    stopLossSlippageBps: number = 100,
+    leverage?: number
+  ): Promise<OrderResponse> {
+    return this.tpslOrders(coin, isBuy, size, {
+      takeProfitPrice,
+      stopLossPrice,
+      stopLossSlippageBps,
+      leverage,
+    });
+  }
+
+  /**
+   * Atomic bracket: a limit entry with TP/SL children in one `normalTpsl`
+   * batch — exactly how the Hyperliquid frontend does order-attached TP/SL.
+   * The children arm only when the entry fills and are sized to it; their
+   * statuses come back as the plain strings "waitingForFill" /
+   * "waitingForTrigger" (parse with `parseOrderStatus`).
+   *
+   * `isBuy` is the ENTRY side; exits are placed on the opposite side,
+   * reduce-only. Statuses align with [entry, tp?, sl?].
+   */
+  async bracketOrder(
+    coin: string,
+    isBuy: boolean,
+    size: number,
+    entryPrice: number,
+    opts: {
+      entryTif?: 'Gtc' | 'Alo';
+      takeProfitPrice?: number;
+      stopLossPrice?: number;
+      stopLossSlippageBps?: number;
+      /** SL fires as a market trigger (default true); false = stop-limit. */
+      stopLossIsMarket?: boolean;
+      leverage?: number;
+    } = {}
+  ): Promise<OrderResponse> {
+    const { takeProfitPrice, stopLossPrice, leverage } = opts;
+    const entryTif = opts.entryTif ?? 'Gtc';
+    const stopLossSlippageBps = opts.stopLossSlippageBps ?? 100;
+    const stopLossIsMarket = opts.stopLossIsMarket ?? true;
+
+    if (takeProfitPrice === undefined && stopLossPrice === undefined) {
+      throw new Error('bracketOrder requires takeProfitPrice, stopLossPrice, or both');
+    }
+
+    await this.requireTrading();
+    await this.getMetaAndAssetCtxs();
+
+    if (leverage && !this.isHip3(coin)) {
+      this.log(`Setting leverage for ${coin} to ${leverage}x cross`);
+      await this.updateLeverage(coin, leverage, true);
+    }
+
+    await this.ensureHip3Ready(coin, size * entryPrice, leverage);
+
+    const assetIndex = this.getAssetIndex(coin);
+    const szDecimals = this.getSzDecimals(coin);
+    const roundedSize = roundSize(size, szDecimals);
+    const exitBuy = !isBuy;
+
+    const slippageMult = stopLossSlippageBps / 10000;
+    const stopLossLimitPrice = stopLossPrice === undefined
+      ? undefined
+      : exitBuy
+        ? stopLossPrice * (1 + slippageMult)
+        : stopLossPrice * (1 - slippageMult);
+
+    const orderWires: Array<{
+      a: number;
+      b: boolean;
+      p: string;
+      s: string;
+      r: boolean;
+      t: { limit: { tif: 'Gtc' | 'Alo' } } | { trigger: { triggerPx: string; isMarket: boolean; tpsl: 'tp' | 'sl' } };
+    }> = [
+      {
+        a: assetIndex,
+        b: isBuy,
+        p: roundPrice(entryPrice, szDecimals),
+        s: roundedSize,
+        r: false,
+        t: { limit: { tif: entryTif } },
       },
     ];
+    if (takeProfitPrice !== undefined) {
+      orderWires.push({
+        a: assetIndex,
+        b: exitBuy,
+        p: roundPrice(takeProfitPrice, szDecimals),
+        s: roundedSize,
+        r: true,
+        t: {
+          trigger: {
+            triggerPx: roundPrice(takeProfitPrice, szDecimals),
+            isMarket: false,
+            tpsl: 'tp',
+          },
+        },
+      });
+    }
+    if (stopLossPrice !== undefined) {
+      orderWires.push({
+        a: assetIndex,
+        b: exitBuy,
+        p: roundPrice(stopLossLimitPrice!, szDecimals),
+        s: roundedSize,
+        r: true,
+        t: {
+          trigger: {
+            triggerPx: roundPrice(stopLossPrice, szDecimals),
+            isMarket: stopLossIsMarket,
+            tpsl: 'sl',
+          },
+        },
+      });
+    }
 
     const orderRequest: {
       orders: typeof orderWires;
@@ -2783,10 +2979,10 @@ export class HyperliquidClient {
 
     try {
       const response = await this.exchange.order(orderRequest, this.vaultParam);
-      this.log('TP/SL pair response:', JSON.stringify(response, null, 2));
+      this.log('Bracket order response:', JSON.stringify(response, null, 2));
       return response as unknown as OrderResponse;
     } catch (error) {
-      this.log('TP/SL pair error:', error);
+      this.log('Bracket order error:', error);
       return {
         status: 'err',
         response: error instanceof Error ? error.message : String(error),
@@ -3246,6 +3442,29 @@ export class HyperliquidClient {
     leverage?: number
   ) {
     await this.getMetaAndAssetCtxs();
+
+    if (!Number.isFinite(durationMinutes) || durationMinutes < 5 || durationMinutes > 1440) {
+      throw new Error('TWAP duration must be between 5 and 1440 minutes');
+    }
+
+    // Native TWAP fires a sub-order every 30s; each must clear the exchange
+    // minimum notional or the venue silently skips slices.
+    if (!reduceOnly) {
+      try {
+        const mid = parseFloat((await this.getAllMids())[coin]);
+        if (Number.isFinite(mid) && mid > 0) {
+          const perSlice = (size * mid) / Math.max(1, Math.round(durationMinutes) * 2);
+          if (perSlice < MIN_ORDER_NOTIONAL_USD) {
+            throw new Error(
+              `TWAP slices of ~$${perSlice.toFixed(2)} fall below the $${MIN_ORDER_NOTIONAL_USD} exchange minimum — shorten the duration or increase the size`
+            );
+          }
+        }
+      } catch (error) {
+        if (error instanceof Error && error.message.includes('exchange minimum')) throw error;
+        this.log('TWAP min-notional pre-check skipped (no mid available):', error);
+      }
+    }
 
     if (leverage) {
       await this.updateLeverage(coin, leverage);

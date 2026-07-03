@@ -138,6 +138,43 @@ export function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+/** Hyperliquid rejects orders below this notional (waived for reduce-only). */
+export const MIN_ORDER_NOTIONAL_USD = 10;
+
+export type ParsedOrderStatus =
+  | { kind: 'resting'; oid: number }
+  | { kind: 'filled'; totalSz: number; avgPx: number; oid: number }
+  /** normalTpsl children behind an unfilled parent — success states, not errors. */
+  | { kind: 'waiting'; state: 'waitingForFill' | 'waitingForTrigger' }
+  | { kind: 'error'; error: string }
+  | { kind: 'unknown'; raw: unknown };
+
+/**
+ * Parse a single entry of an order response's `statuses` array. Handles the
+ * plain-string success states ("waitingForFill" / "waitingForTrigger") that
+ * Hyperliquid returns for normalTpsl children armed behind an unfilled parent,
+ * alongside the usual resting/filled/error objects.
+ */
+export function parseOrderStatus(status: unknown): ParsedOrderStatus {
+  if (status === 'waitingForFill' || status === 'waitingForTrigger') {
+    return { kind: 'waiting', state: status };
+  }
+  if (status && typeof status === 'object') {
+    const data = status as Record<string, unknown>;
+    if (data.resting) {
+      return { kind: 'resting', oid: (data.resting as { oid: number }).oid };
+    }
+    if (data.filled) {
+      const f = data.filled as { totalSz: string; avgPx: string; oid: number };
+      return { kind: 'filled', totalSz: parseFloat(f.totalSz), avgPx: parseFloat(f.avgPx), oid: f.oid };
+    }
+    if (data.error) {
+      return { kind: 'error', error: String(data.error) };
+    }
+  }
+  return { kind: 'unknown', raw: status };
+}
+
 /**
  * Generate a random client order ID
  */

@@ -47,7 +47,10 @@ export {
   generateCloid,
   orderToWire,
   checkBuilderFeeApproval,
+  MIN_ORDER_NOTIONAL_USD,
+  parseOrderStatus,
 } from './core/utils.js';
+export type { ParsedOrderStatus } from './core/utils.js';
 
 export type * from './core/types.js';
 

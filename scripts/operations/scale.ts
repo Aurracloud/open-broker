@@ -4,7 +4,7 @@
 import { fileURLToPath } from 'url';
 import { getClient } from '../core/client.js';
 import type { CancelResponse, OrderResponse } from '../core/types.js';
-import { formatUsd, parseArgs } from '../core/utils.js';
+import { MIN_ORDER_NOTIONAL_USD, formatUsd, parseArgs } from '../core/utils.js';
 
 function printUsage() {
   console.log(`
@@ -194,10 +194,19 @@ export async function runScale(opts: ScaleOptions): Promise<ScaleResult> {
     );
   }
 
+  // Every level must clear the exchange's minimum notional (waived for
+  // reduce-only) or it gets a silent per-level rejection.
+  const thinnest = levels.reduce((min, level) => Math.min(min, level.size * level.price), Infinity);
+  const belowMinimum = !reduceOnly && thinnest < MIN_ORDER_NOTIONAL_USD;
+  const minNotionalMsg = `smallest scale level (~$${thinnest.toFixed(2)}) is below the $${MIN_ORDER_NOTIONAL_USD} exchange minimum — use fewer levels or a larger size`;
+
   if (opts.dryRun) {
+    if (belowMinimum) out(`\n⚠️ The ${minNotionalMsg}`);
     out('\n🔍 Dry run - orders not placed');
     return { status: 'dry', levels, restingOids: [], filledOids: [], errors: [], rolledBack: false };
   }
+
+  if (belowMinimum) throw new Error(`the ${minNotionalMsg}`);
 
   out('\nPlacing ladder as a bulk order...\n');
 

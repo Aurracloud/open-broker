@@ -2,7 +2,7 @@
 // TWAP (Time-Weighted Average Price) execution using Hyperliquid's native TWAP orders
 
 import { getClient } from '../core/client.js';
-import { formatUsd, parseArgs } from '../core/utils.js';
+import { MIN_ORDER_NOTIONAL_USD, formatUsd, parseArgs } from '../core/utils.js';
 
 function printUsage() {
   console.log(`
@@ -90,6 +90,10 @@ async function main() {
     }
 
     const notional = midPrice * totalSize;
+    // Native TWAP fires a sub-order every 30s; each must clear the exchange minimum.
+    const sliceCount = durationMinutes * 2;
+    const perSliceNotional = notional / sliceCount;
+    const sliceBelowMinimum = !reduceOnly && perSliceNotional < MIN_ORDER_NOTIONAL_USD;
 
     console.log('Order Details');
     console.log('-------------');
@@ -99,6 +103,7 @@ async function main() {
     console.log(`Current Price:  ${formatUsd(midPrice)}`);
     console.log(`Est. Notional:  ${formatUsd(notional)}`);
     console.log(`Duration:       ${formatDuration(durationMinutes * 60)}`);
+    console.log(`Slices:         ~${sliceCount} (every 30s, ~${formatUsd(perSliceNotional)} each)`);
     console.log(`Randomize:      ${randomize ? 'yes' : 'no'}`);
     console.log(`Reduce Only:    ${reduceOnly ? 'yes' : 'no'}`);
     if (leverage) {
@@ -106,9 +111,17 @@ async function main() {
     }
 
     if (dryRun) {
+      if (sliceBelowMinimum) {
+        console.log(`\n⚠️ TWAP slices of ~${formatUsd(perSliceNotional)} fall below the $${MIN_ORDER_NOTIONAL_USD} exchange minimum — shorten the duration or increase the size.`);
+      }
       console.log('\nDry run - no order placed.');
       console.log('The exchange will handle order slicing and timing automatically.');
       return;
+    }
+
+    if (sliceBelowMinimum) {
+      console.error(`Error: TWAP slices of ~${formatUsd(perSliceNotional)} fall below the $${MIN_ORDER_NOTIONAL_USD} exchange minimum — shorten the duration or increase the size.`);
+      process.exit(1);
     }
 
     console.log('\nPlacing native TWAP order...\n');

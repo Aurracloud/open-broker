@@ -23,15 +23,18 @@ Options:
   --type        Order type: tp (take profit) or sl (stop loss)
   --limit       Limit price when triggered (default: trigger price for TP, with slippage for SL)
   --slippage    Slippage for SL in bps (default: 100 = 1%)
+  --exec        Execution when triggered: market or limit
+                (default: market for SL, limit for TP)
   --leverage    Set leverage (e.g., 10 for 10x). Cross for main perps, isolated for HIP-3
   --reduce      Reduce-only order (default: true for TP/SL)
   --dry         Dry run - show order without placing
 
 Trigger Order Behavior:
   - Order is dormant until price reaches trigger level
-  - Once triggered, becomes a limit order at the limit price
-  - TP: Limit price = trigger price (favorable)
-  - SL: Limit price = trigger ± slippage (ensures fill)
+  - TP: rests as a limit order at the limit price (favorable)
+  - SL: fires as a market order capped by the limit price (trigger ± slippage);
+    pass --exec limit for a stop-limit, but note a gap move past the band can
+    skip the stop entirely and leave the position unprotected
 
 Examples:
   # Take profit: sell 0.5 HYPE when price rises to $40
@@ -63,6 +66,11 @@ async function main() {
   const orderType = args.type as string;
   const limitPriceOverride = args.limit ? parseFloat(args.limit as string) : undefined;
   const slippageBps = args.slippage ? parseInt(args.slippage as string) : 100;
+  const execOverride = args.exec as string | undefined;
+  if (execOverride && execOverride !== 'market' && execOverride !== 'limit') {
+    console.error('Error: --exec must be "market" or "limit"');
+    process.exit(1);
+  }
   const leverage = args.leverage ? parseInt(args.leverage as string) : undefined;
   const reduceOnly = args.reduce !== 'false'; // Default true
   const dryRun = args.dry as boolean;
@@ -116,12 +124,17 @@ async function main() {
       // TP: use trigger price as limit (favorable)
       limitPrice = triggerPrice;
     } else {
-      // SL: add slippage to ensure fill
+      // SL: slippage band past the trigger — caps the market fill, or is the
+      // resting price for a stop-limit
       const slippageMult = slippageBps / 10000;
       limitPrice = isBuy
         ? triggerPrice * (1 + slippageMult)
         : triggerPrice * (1 - slippageMult);
     }
+
+    // SL fires as a market trigger by default (a stop-limit can be gapped
+    // over and never fill); TP rests as a limit at the target.
+    const isMarket = execOverride ? execOverride === 'market' : tpsl === 'sl';
 
     const distanceFromCurrent = ((triggerPrice - currentPrice) / currentPrice) * 100;
     const notional = triggerPrice * size;
@@ -134,7 +147,7 @@ async function main() {
     console.log(`Size:          ${size}`);
     console.log(`Current Price: ${formatUsd(currentPrice)}`);
     console.log(`Trigger Price: ${formatUsd(triggerPrice)} (${distanceFromCurrent >= 0 ? '+' : ''}${distanceFromCurrent.toFixed(2)}%)`);
-    console.log(`Limit Price:   ${formatUsd(limitPrice)}`);
+    console.log(`Execution:     ${isMarket ? `market (fill capped at ${formatUsd(limitPrice)})` : `limit @ ${formatUsd(limitPrice)}`}`);
     console.log(`Reduce Only:   ${reduceOnly ? 'Yes' : 'No'}`);
     console.log(`Est. Notional: ${formatUsd(notional)}`);
 
@@ -170,7 +183,8 @@ async function main() {
       limitPrice,
       tpsl,
       reduceOnly,
-      leverage
+      leverage,
+      isMarket
     );
 
     console.log('\nResult');

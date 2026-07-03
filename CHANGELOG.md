@@ -7,6 +7,25 @@ All notable changes to Open Broker will be documented in this file.
 ### Added
 - Added an allowlisted `openbroker install <package>` command for optional companion packages, initially supporting `monitoring` (`openbroker-monitoring`) and `extended` (`openbroker-extended`). Re-running installs the latest release; `--tag`, `--dry`, and `--list` are supported.
 
+## [1.10.0] - 2026-07-03
+
+Ported the advanced-execution fixes validated in the trading panel review (`openbroker-landing/ADVANCED_EXECUTIONS_REVIEW.md`) to the CLI.
+
+### Changed
+- **Stop losses default to market triggers.** `client.stopLoss`, `bracket`, `set-tpsl`, and `trigger-order --type sl` now place the SL with `isMarket: true` — the limit price only caps the fill `--sl-slippage` bps past the trigger. A stop-limit SL can be gapped over and leave the position unprotected; the old behavior is available via `--sl-limit` / `trigger-order --exec limit` (CLI) or `isMarket: false` (library). `client.triggerOrder` gained the trailing `isMarket` parameter (default `false`, unchanged).
+- **`set-tpsl` places one `positionTpsl` batch** instead of two independent triggers: the venue ties TP/SL to the open position and OCO-cancels the survivor when one fires. Wrong-side triggers (e.g. a long TP below the live price) are now hard errors instead of warnings — the exchange fires those immediately on placement.
+- **`bracket` post-fill exits use `positionTpsl`** (triggers track the position) instead of a standalone `normalTpsl` pair, are re-validated against the actual fill price, and a fill that drifts past a fixed target is reported instead of silently arming a broken bracket. `client.tpslPair` now delegates to `tpslOrders` with these defaults.
+- **`chase` survives fast markets and never strands orders:** a post-only rejection ("would have immediately matched") reprices on the next tick instead of aborting; transient `allMids` failures retry instead of throwing; the cleanup cancel moved into a `finally` so any error still pulls the resting quote; hard order rejections now throw instead of looping silently.
+- **`twap` validates slice notional:** native TWAP fires a sub-order every 30s, and each slice must clear the $10 exchange minimum (waived for reduce-only) — checked in both the script and `client.twapOrder`, which also enforces the 5–1440 minute bounds.
+
+### Added
+- `client.tpslOrders(coin, exitIsBuy, size, opts)` — TP and/or SL triggers in one batch with `positionTpsl` (default) or `normalTpsl` grouping, market or stop-limit SL, one-sided support.
+- `client.bracketOrder(coin, isBuy, size, entryPrice, opts)` — atomic limit entry + TP/SL children in one `normalTpsl` batch; the exchange arms the exits on fill (children return `"waitingForFill"`), so the bracket survives the process exiting.
+- `bracket` limit entries use the atomic batch by default (`--no-atomic` restores the fill-watch path), support one-sided TP-only/SL-only brackets, absolute targets via `--tp-price`/`--sl-price`, and validate targets (direction vs entry, SL% < 100) before any order goes out.
+- $10 min-notional pre-checks: thinnest `scale` level, `twap` slices, `chase` start size and dust remainder (chase stops with status `min_notional` instead of erroring on every tick). All are waived for reduce-only and downgraded to warnings under `--dry`.
+- `parseOrderStatus` / `MIN_ORDER_NOTIONAL_USD` exported from the library; the parser understands the plain-string `"waitingForFill"` / `"waitingForTrigger"` success statuses `normalTpsl` children return behind an unfilled parent.
+- `BracketClient` now requires `tpslOrders`, `bracketOrder`, and `cancel` (replacing `tpslPair`); `BracketResult` gains the `armed` status for atomically placed, not-yet-filled brackets.
+
 ## [1.9.3] - 2026-06-23
 
 ### Changed

@@ -4,7 +4,7 @@
 import { fileURLToPath } from 'url';
 import { getClient } from '../core/client.js';
 import type { OrderResponse, CancelResponse, OpenOrder } from '../core/types.js';
-import { formatUsd, parseArgs, sleep } from '../core/utils.js';
+import { MIN_ORDER_NOTIONAL_USD, formatUsd, parseArgs, sleep } from '../core/utils.js';
 import { UserFillWatcher, type FillWatcher } from './execution.js';
 
 function printUsage() {
@@ -68,7 +68,7 @@ export interface ChaseClient {
 }
 
 export interface ChaseResult {
-  status: 'dry' | 'filled' | 'timeout' | 'max_chase_exceeded';
+  status: 'dry' | 'filled' | 'timeout' | 'max_chase_exceeded' | 'min_notional';
   iterations: number;
   durationSec: number;
   startMid: number;
@@ -99,6 +99,10 @@ export async function runChase(opts: ChaseOptions): Promise<ChaseResult> {
   const startMid = parseFloat(mids[opts.coin]);
   if (!startMid) throw new Error(`No market data for ${opts.coin}`);
 
+  const startBelowMinimum = !opts.reduceOnly && opts.size * startMid < MIN_ORDER_NOTIONAL_USD;
+  const minNotionalMsg = `Chase size (~$${(opts.size * startMid).toFixed(2)}) is below the $${MIN_ORDER_NOTIONAL_USD} exchange minimum`;
+  if (startBelowMinimum && !opts.dryRun) throw new Error(minNotionalMsg);
+
   const maxChasePrice = isBuy
     ? startMid * (1 + maxChaseBps / 10000)
     : startMid * (1 - maxChaseBps / 10000);
@@ -116,6 +120,7 @@ export async function runChase(opts: ChaseOptions): Promise<ChaseResult> {
   out(`Order Type:    ALO (post-only)`);
 
   if (opts.dryRun) {
+    if (startBelowMinimum) out(`\n⚠️ ${minNotionalMsg}`);
     out('\n🔍 Dry run - chase not started');
     return { status: 'dry', iterations: 0, durationSec: 0, startMid, endMid: startMid };
   }
@@ -128,7 +133,7 @@ export async function runChase(opts: ChaseOptions): Promise<ChaseResult> {
   let remainingSize = opts.size;
   let iteration = 0;
   let filled = false;
-  let exitReason: 'filled' | 'timeout' | 'max_chase_exceeded' = 'timeout';
+  let exitReason: 'filled' | 'timeout' | 'max_chase_exceeded' | 'min_notional' = 'timeout';
   const accountedFills = new Map<number, number>();
   const ownsFillWatcher = !opts.fillWatcher;
   const fillWatcher = opts.fillWatcher ?? new UserFillWatcher(client, { sinceMs: startTime });
@@ -160,9 +165,20 @@ export async function runChase(opts: ChaseOptions): Promise<ChaseResult> {
         }
       }
 
-      const currentMids = await client.getAllMids();
-      const currentMid = parseFloat(currentMids[opts.coin]);
-      if (!currentMid) throw new Error(`No market data for ${opts.coin}`);
+      // A transient /info failure mid-chase must not kill the execution (and
+      // strand the resting order) — wait a tick and retry instead.
+      let currentMid = NaN;
+      try {
+        const currentMids = await client.getAllMids();
+        currentMid = parseFloat(currentMids[opts.coin]);
+      } catch {
+        /* transient failure — retry next tick */
+      }
+      if (!Number.isFinite(currentMid) || currentMid <= 0) {
+        out(`[${iteration}] ⏳ No live price — retrying...`);
+        await sleep(intervalMs);
+        continue;
+      }
 
       if (isBuy && currentMid > maxChasePrice) {
         out(`\n⚠️ Price ${formatUsd(currentMid)} exceeded max chase ${formatUsd(maxChasePrice)}`);
@@ -206,6 +222,14 @@ export async function runChase(opts: ChaseOptions): Promise<ChaseResult> {
           break;
         }
 
+        // The dust remainder of a partial fill can drop below the exchange
+        // minimum — placing it would just error out on every tick.
+        if (!opts.reduceOnly && remainingSize * currentMid < MIN_ORDER_NOTIONAL_USD) {
+          out(`\n⚠️ Remaining size (~$${(remainingSize * currentMid).toFixed(2)}) fell below the $${MIN_ORDER_NOTIONAL_USD} exchange minimum`);
+          exitReason = 'min_notional';
+          break;
+        }
+
         out(`[${iteration}] Mid: ${formatUsd(currentMid)} → Order: ${formatUsd(orderPrice)} x ${remainingSize.toFixed(6)}...`);
 
         const response = await client.limitOrder(opts.coin, isBuy, remainingSize, orderPrice, 'Alo', opts.reduceOnly, opts.leverage);
@@ -226,10 +250,18 @@ export async function runChase(opts: ChaseOptions): Promise<ChaseResult> {
               break;
             }
           } else if (status?.error) {
-            out(`❌ ${status.error}`);
+            if (/post.?only|immediately match/i.test(status.error)) {
+              // Stale mid crossed the book — the fast-market condition chase
+              // exists for. Reprice on the next tick instead of dying.
+              out(`↩️ Quote would cross the book — repricing`);
+              lastPrice = null;
+            } else {
+              throw new Error(status.error);
+            }
           }
         } else {
-          out(`❌ Failed`);
+          const reason = typeof response.response === 'string' ? response.response : 'Order rejected';
+          throw new Error(reason);
         }
       } else {
         if (currentOid !== null) {
@@ -261,23 +293,24 @@ export async function runChase(opts: ChaseOptions): Promise<ChaseResult> {
       await sleep(intervalMs);
     }
   } finally {
+    // Always pull the working order before returning — even when the loop
+    // throws — so an error never strands a live resting quote at a stale price.
+    if (currentOid !== null && !filled) {
+      applyFills(currentOid);
+      out(`\nCancelling unfilled order...`);
+      try {
+        await client.cancel(opts.coin, currentOid);
+        out(`✅ Cancelled`);
+      } catch {
+        out(`⚠️ Could not cancel (may have filled)`);
+      }
+      applyFills(currentOid);
+      if (remainingSize <= opts.size * 0.001) {
+        filled = true;
+        exitReason = 'filled';
+      }
+    }
     if (ownsFillWatcher) await fillWatcher.stop();
-  }
-
-  if (currentOid !== null && !filled) {
-    applyFills(currentOid);
-    out(`\nCancelling unfilled order...`);
-    try {
-      await client.cancel(opts.coin, currentOid);
-      out(`✅ Cancelled`);
-    } catch {
-      out(`⚠️ Could not cancel (may have filled)`);
-    }
-    applyFills(currentOid);
-    if (remainingSize <= opts.size * 0.001) {
-      filled = true;
-      exitReason = 'filled';
-    }
   }
 
   const elapsed = (Date.now() - startTime) / 1000;

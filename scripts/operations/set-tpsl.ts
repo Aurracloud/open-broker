@@ -2,7 +2,7 @@
 // Set Take Profit and/or Stop Loss on an existing position
 
 import { getClient } from '../core/client.js';
-import { formatUsd, parseArgs, sleep } from '../core/utils.js';
+import { formatUsd, parseArgs, parseOrderStatus } from '../core/utils.js';
 
 function printUsage() {
   console.log(`
@@ -10,7 +10,8 @@ Open Broker - Set TP/SL
 =======================
 
 Add take profit and/or stop loss orders to an existing position.
-Uses trigger orders that execute when price reaches the target.
+Placed as one batch with Hyperliquid's positionTpsl grouping: the triggers
+track the open position and OCO-cancel each other when one fires.
 
 Usage:
   npx tsx scripts/operations/set-tpsl.ts --coin <COIN> [--tp <PRICE>] [--sl <PRICE>]
@@ -20,7 +21,10 @@ Options:
   --tp          Take profit trigger price
   --sl          Stop loss trigger price
   --size        Size to protect (default: full position size)
-  --sl-slippage Stop loss slippage in bps (default: 100 = 1%)
+  --sl-slippage Stop loss fill cap past the trigger in bps (default: 100 = 1%)
+  --sl-limit    Place the SL as a stop-limit instead of a market trigger.
+                Warning: a gap move past the limit band can skip the stop
+                entirely and leave the position unprotected.
   --dry         Dry run - show orders without placing
   --verbose     Show debug output
 
@@ -46,9 +50,11 @@ Examples:
 How Trigger Orders Work:
   - TP/SL are trigger orders, NOT regular limit orders
   - They sit dormant until price reaches the trigger level
-  - Once triggered, they execute as limit orders
+  - TP executes as a limit order at the target; SL executes as a market
+    order capped by the slippage band (use --sl-limit for a stop-limit)
   - These are reduce-only orders (close position, don't reverse)
-  - SL has slippage buffer to ensure fill in fast markets
+  - positionTpsl grouping ties them to the position: when one fires and
+    closes the position, the venue cancels the other automatically
 `);
 }
 
@@ -95,6 +101,7 @@ async function main() {
   const slInput = args.sl as string | undefined;
   const sizeOverride = args.size ? parseFloat(args.size as string) : undefined;
   const slSlippage = args['sl-slippage'] ? parseInt(args['sl-slippage'] as string) : 100;
+  const slMarket = !(args['sl-limit'] as boolean);
   const dryRun = args.dry as boolean;
 
   if (!coin) {
@@ -159,25 +166,28 @@ async function main() {
       process.exit(1);
     }
 
-    // Validate TP/SL make sense for position direction
+    // Triggers must sit on the correct side of the LIVE price, or the
+    // exchange fires them immediately on placement.
+    const directionErrors: string[] = [];
     if (isLong) {
       if (tpPrice && tpPrice <= currentPrice) {
-        console.warn(`⚠️  Warning: TP (${formatUsd(tpPrice)}) is at or below current price (${formatUsd(currentPrice)})`);
-        console.warn('   For LONG positions, TP should be above current price');
+        directionErrors.push(`TP (${formatUsd(tpPrice)}) must be above the current price (${formatUsd(currentPrice)}) for a LONG`);
       }
       if (slPrice && slPrice >= currentPrice) {
-        console.warn(`⚠️  Warning: SL (${formatUsd(slPrice)}) is at or above current price (${formatUsd(currentPrice)})`);
-        console.warn('   For LONG positions, SL should be below current price');
+        directionErrors.push(`SL (${formatUsd(slPrice)}) must be below the current price (${formatUsd(currentPrice)}) for a LONG`);
       }
     } else {
       if (tpPrice && tpPrice >= currentPrice) {
-        console.warn(`⚠️  Warning: TP (${formatUsd(tpPrice)}) is at or above current price (${formatUsd(currentPrice)})`);
-        console.warn('   For SHORT positions, TP should be below current price');
+        directionErrors.push(`TP (${formatUsd(tpPrice)}) must be below the current price (${formatUsd(currentPrice)}) for a SHORT`);
       }
       if (slPrice && slPrice <= currentPrice) {
-        console.warn(`⚠️  Warning: SL (${formatUsd(slPrice)}) is at or below current price (${formatUsd(currentPrice)})`);
-        console.warn('   For SHORT positions, SL should be above current price');
+        directionErrors.push(`SL (${formatUsd(slPrice)}) must be above the current price (${formatUsd(currentPrice)}) for a SHORT`);
       }
+    }
+    if (directionErrors.length > 0) {
+      for (const err of directionErrors) console.error(`Error: ${err}`);
+      console.error('A trigger on the wrong side of the live price fires immediately on placement.');
+      process.exit(1);
     }
 
     // Calculate risk/reward
@@ -216,7 +226,7 @@ async function main() {
       const slLimitPrice = isLong
         ? slPrice * (1 - slSlippage / 10000)
         : slPrice * (1 + slSlippage / 10000);
-      console.log(`Stop Loss:     ${slSide} ${size} @ ${formatUsd(slPrice)} trigger, ${formatUsd(slLimitPrice)} limit (-${slDistance.toFixed(2)}%)`);
+      console.log(`Stop Loss:     ${slSide} ${size} @ ${formatUsd(slPrice)} trigger, ${slMarket ? `market (fill capped at ${formatUsd(slLimitPrice)})` : `${formatUsd(slLimitPrice)} limit`} (-${slDistance.toFixed(2)}%)`);
     }
     if (riskReward > 0) {
       console.log(`Risk/Reward:   1:${riskReward.toFixed(2)}`);
@@ -235,50 +245,45 @@ async function main() {
       return;
     }
 
-    console.log('\nPlacing trigger orders...\n');
+    console.log('\nPlacing trigger orders (positionTpsl batch)...\n');
 
-    // Place Take Profit
+    // One batch with positionTpsl grouping: the venue ties the triggers to
+    // the open position and OCO-cancels the survivor when one fires.
+    const exitSide = !isLong; // Opposite of position direction
+    const response = await client.tpslOrders(coin, exitSide, size, {
+      takeProfitPrice: tpPrice ?? undefined,
+      stopLossPrice: slPrice ?? undefined,
+      stopLossSlippageBps: slSlippage,
+      stopLossIsMarket: slMarket,
+      grouping: 'positionTpsl',
+    });
+
     let tpOid: number | null = null;
-    if (tpPrice) {
-      const tpSide = !isLong; // Opposite of position direction
-      const response = await client.takeProfit(coin, tpSide, size, tpPrice);
-
-      if (response.status === 'ok' && response.response && typeof response.response === 'object') {
-        const status = response.response.data.statuses[0];
-        if (status?.resting) {
-          tpOid = status.resting.oid;
-          console.log(`✅ Take Profit placed @ ${formatUsd(tpPrice)} (OID: ${tpOid})`);
-        } else if (status?.error) {
-          console.log(`❌ TP failed: ${status.error}`);
-        } else {
-          console.log(`⚠️  TP status:`, JSON.stringify(status));
-        }
-      } else {
-        console.log(`❌ TP failed: ${typeof response.response === 'string' ? response.response : 'Unknown error'}`);
-      }
-
-      await sleep(200);
-    }
-
-    // Place Stop Loss
     let slOid: number | null = null;
-    if (slPrice) {
-      const slSide = !isLong; // Opposite of position direction
-      const response = await client.stopLoss(coin, slSide, size, slPrice, slSlippage);
-
-      if (response.status === 'ok' && response.response && typeof response.response === 'object') {
-        const status = response.response.data.statuses[0];
-        if (status?.resting) {
-          slOid = status.resting.oid;
-          console.log(`✅ Stop Loss placed @ ${formatUsd(slPrice)} (OID: ${slOid})`);
-        } else if (status?.error) {
-          console.log(`❌ SL failed: ${status.error}`);
+    let placementErrors = 0;
+    if (response.status === 'ok' && response.response && typeof response.response === 'object') {
+      const statuses = response.response.data.statuses.map(parseOrderStatus);
+      let idx = 0;
+      for (const leg of [tpPrice ? 'Take Profit' : null, slPrice ? 'Stop Loss' : null]) {
+        if (!leg) continue;
+        const status = statuses[idx++];
+        const price = leg === 'Take Profit' ? tpPrice! : slPrice!;
+        if (status?.kind === 'resting') {
+          if (leg === 'Take Profit') tpOid = status.oid; else slOid = status.oid;
+          console.log(`✅ ${leg} placed @ ${formatUsd(price)} (OID: ${status.oid})`);
+        } else if (status?.kind === 'waiting') {
+          console.log(`✅ ${leg} armed @ ${formatUsd(price)} (${status.state})`);
+        } else if (status?.kind === 'error') {
+          placementErrors++;
+          console.log(`❌ ${leg} failed: ${status.error}`);
         } else {
-          console.log(`⚠️  SL status:`, JSON.stringify(status));
+          placementErrors++;
+          console.log(`⚠️  ${leg} status:`, JSON.stringify(status));
         }
-      } else {
-        console.log(`❌ SL failed: ${typeof response.response === 'string' ? response.response : 'Unknown error'}`);
       }
+    } else {
+      placementErrors++;
+      console.log(`❌ TP/SL failed: ${typeof response.response === 'string' ? response.response : 'Unknown error'}`);
     }
 
     // Summary
@@ -286,12 +291,12 @@ async function main() {
     console.log(`Position:    ${isLong ? 'LONG' : 'SHORT'} ${absSize} ${coin}`);
     console.log(`Entry:       ${formatUsd(entryPrice)}`);
     if (tpOid) console.log(`Take Profit: ${formatUsd(tpPrice!)} (OID: ${tpOid})`);
-    if (slOid) console.log(`Stop Loss:   ${formatUsd(slPrice!)} (OID: ${slOid})`);
+    if (slOid) console.log(`Stop Loss:   ${formatUsd(slPrice!)} (OID: ${slOid}, ${slMarket ? 'market trigger' : 'stop-limit'})`);
 
-    if (tpOid && slOid) {
-      console.log(`\n💡 Tip: When one order fills, cancel the other manually:`);
-      console.log(`   npx tsx scripts/operations/cancel.ts --coin ${coin} --oid <OID>`);
+    if (placementErrors === 0 && tpPrice && slPrice) {
+      console.log(`\n💡 The triggers track the position: when one fires, the venue cancels the other.`);
     }
+    if (placementErrors > 0) process.exit(1);
 
   } catch (error) {
     console.error('Error:', error);

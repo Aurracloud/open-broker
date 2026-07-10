@@ -797,6 +797,58 @@ Existing strategies continue to use `api.client`. Inside the automation runtime,
 
 Every automation must export `guardrails` plus its default factory. See [SKILL.md](./SKILL.md) for the complete schema, WebSocket event model, and runtime enforcement rules.
 
+## Guardian (Position Risk Monitoring)
+
+Watch any Hyperliquid address for liquidation risk, missing stop-losses, funding bleed and more — the CLI counterpart of the hosted guardian dashboard. Read-only: it never places orders and works without a private key (set `HYPERLIQUID_ACCOUNT_ADDRESS` or pass `--address`).
+
+```bash
+openbroker guardian run                                  # watch your own account
+openbroker guardian run --address 0xabc...,0xdef...      # watch any addresses
+openbroker guardian run --min-severity warning --disable position_lifecycle
+openbroker guardian run --json                           # JSON-lines output for agents
+```
+
+Six rules, all on by default (see `openbroker guardian rules` for thresholds and the flags that tune them):
+
+| Rule | Fires |
+|------|-------|
+| `liq_proximity` | warning at 10% from liquidation price, critical at 5% / 2% (with hysteresis + cooldowns) |
+| `margin_usage` | warning when margin used exceeds 80% of equity |
+| `no_tpsl` | info when a position sits 15+ min with no reduce-only trigger orders |
+| `stale_order` | info for limit orders resting 12h+ and 3%+ from mid |
+| `funding_bleed` | warning when paying 15%+ APR funding against your side for 60+ min |
+| `position_lifecycle` | info on position open / close / resize |
+
+Single-address runs also subscribe to WebSocket `userEvents` for instant liquidation alerts and fill-triggered re-polls.
+
+### Telegram alerts
+
+Guardian delivers to your own Telegram bot (your token, your chat — nothing goes through a third-party service):
+
+```bash
+# 1. Message @BotFather on Telegram, send /newbot, copy the token
+# 2. Add TELEGRAM_BOT_TOKEN=123456:ABC... to your config (~/.openbroker/.env)
+openbroker guardian connect     # prints a t.me deep link; tap START to link the chat
+openbroker guardian test        # send a test message
+openbroker guardian run         # alerts now land in Telegram too
+```
+
+If an OpenClaw agent gateway is configured (`OPENCLAW_HOOKS_TOKEN` / `OPENCLAW_GATEWAY_PORT`), every alert also wakes the agent through `POST /hooks/agent` — so an agent can react to risk events (e.g. attach a stop with `openbroker tpsl`) instead of just reading about them.
+
+Library consumers get the same engine in-process:
+
+```typescript
+import { startGuardian } from 'openbroker';
+
+const guardian = await startGuardian({
+  addresses: ['0x...'],
+  prefs: { minSeverity: 'warning', rules: { position_lifecycle: false } },
+  quiet: true,
+  onAlert: (alert) => { /* route anywhere */ },
+});
+// later: await guardian.stop();
+```
+
 ## OpenClaw Plugin
 
 OpenBroker ships as an [OpenClaw](https://openclaw.ai) plugin. When installed via OpenClaw, it registers structured agent tools and a background position watcher — no Bash wrappers needed.

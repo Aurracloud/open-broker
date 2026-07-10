@@ -1,6 +1,6 @@
 ---
 name: openbroker
-description: Install, onboard, and operate the OpenBroker Hyperliquid CLI for market and account inspection, restricted API-wallet setup, perp/HIP-3/spot/HIP-4 trading, order management, and TypeScript automations. Use when Codex needs to set up OpenBroker, run or explain `openbroker` commands, inspect Hyperliquid state, safely preview or execute trades, or create and debug OpenBroker automations.
+description: Install, onboard, and operate the OpenBroker Hyperliquid CLI for market and account inspection, restricted API-wallet setup, perp/HIP-3/spot/HIP-4 trading, order management, TypeScript automations, and guardian position-risk monitoring with Telegram alerts. Use when Codex needs to set up OpenBroker, run or explain `openbroker` commands, inspect Hyperliquid state, safely preview or execute trades, create and debug OpenBroker automations, or watch positions for liquidation/TP-SL/funding risk.
 ---
 
 # OpenBroker — Hyperliquid CLI skill
@@ -37,7 +37,7 @@ command -v openbroker
 openbroker --version
 ```
 
-Require OpenBroker 1.10.0 or newer (earlier versions lack the current TP/SL and bracket flags documented here). When the user explicitly asks to set up OpenBroker, install or upgrade the CLI as part of that request, using the normal approval flow for global or network writes:
+Require OpenBroker 1.11.0 or newer (earlier versions lack the `guardian` commands and some TP/SL and bracket flags documented here). When the user explicitly asks to set up OpenBroker, install or upgrade the CLI as part of that request, using the normal approval flow for global or network writes:
 
 ```bash
 npm install -g openbroker@latest
@@ -343,6 +343,49 @@ Additional practical caveats:
 - `ALO` / post-only orders can be rejected when they would cross; treat that as an execution branch, not a surprise. For chase-style execution, track fills from `userFills` and requote only the remaining size.
 - Naked directional positions usually need explicit TP/SL or equivalent risk logic. Hedged multi-leg strategies need strategy-specific exits instead of cargo-cult TP/SL rules.
 - For new automations, do a dry run, inspect `auto report`, and only then run live unless the user explicitly requested immediate live execution.
+
+## Guardian (position risk monitoring)
+
+`openbroker guardian` is a read-only watcher for Hyperliquid addresses: it never places orders and works without a private key (`--address` or `HYPERLIQUID_ACCOUNT_ADDRESS` is enough). Use it when the user asks to "watch my positions", be alerted before liquidation, or get notified about missing stop-losses or funding costs.
+
+| Command | Use |
+|---|---|
+| `guardian run` | Start watching (long-running foreground process) |
+| `guardian connect` | Link a Telegram chat for alert delivery |
+| `guardian test` | Send a test message to the linked chat |
+| `guardian status` | Show configured address, Telegram link state, agent hook |
+| `guardian rules` | List rules, default thresholds, and their tuning flags |
+
+Six rules, all enabled by default:
+
+| Rule | Fires | Severity |
+|---|---|---|
+| `liq_proximity` | Mark within 10% / 5% / 2% of liquidation price (hysteresis + 30 min cooldown) | warning / critical |
+| `margin_usage` | Margin used above 80% of equity | warning |
+| `no_tpsl` | Position open 15+ min with no reduce-only trigger orders | info |
+| `stale_order` | Limit order resting 12h+ and 3%+ away from mid | info |
+| `funding_bleed` | Paying 15%+ APR funding against the position side for 60+ min | warning |
+| `position_lifecycle` | Position opened / closed / resized | info |
+
+Run flags:
+
+| Flag | Meaning |
+|---|---|
+| `--address <0x..[,0x..]>` | Watch specific address(es); default is the configured account |
+| `--min-severity info\|warning\|critical` | Delivery floor |
+| `--disable <csv>` / `--only <csv>` | Per-rule opt-out / allowlist |
+| `--liq-warn`, `--liq-critical`, `--margin-pct`, `--funding-apr`, `--tpsl-minutes`, `--stale-hours` | Threshold overrides |
+| `--poll <ms>` | Position poll cadence (default 30000; automatically 15000 near liquidation) |
+| `--json` | Emit alerts as JSON lines on stdout |
+| `--no-telegram`, `--no-ws` | Disable the Telegram channel / WebSocket fast lane |
+
+Operating notes:
+
+- `guardian run` stays in the foreground like `chase`; alerts stop when the process exits. Single-address runs also subscribe to WebSocket `userEvents` for immediate liquidation alerts; multi-address runs are REST-only.
+- Prefer `--json` when an agent consumes the alerts. Each line is one alert object: `{time, address, rule, coin, severity, message, payload}`.
+- Telegram uses the **user's own bot**: the user creates one via @BotFather and puts `TELEGRAM_BOT_TOKEN` in the OpenBroker config themselves. Never ask the user to paste the bot token into the conversation, and never print it. Then run `openbroker guardian connect`, show the printed `https://t.me/...?start=<code>` link to the user, and keep the command running until they tap START — the CLI saves `TELEGRAM_CHAT_ID` automatically. Verify with `openbroker guardian test`.
+- If `OPENCLAW_HOOKS_TOKEN` (and optionally `OPENCLAW_GATEWAY_PORT`) is set, every alert also wakes the OpenClaw agent via `POST /hooks/agent`. A sensible agent reaction to a `no_tpsl` alert is to propose `openbroker tpsl --coin <COIN> ... --dry` — never place protection live without explicit user direction.
+- Guardian only observes. If the user wants automatic enforcement (e.g. auto-attach stops), that is an automation with trading guardrails, not a guardian flag.
 
 ## Failure checks
 

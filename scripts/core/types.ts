@@ -241,6 +241,29 @@ export interface OpenOrder {
   timestamp: number;
 }
 
+/**
+ * Open order from the `frontendOpenOrders` info endpoint — same as OpenOrder
+ * plus the trigger/reduce-only display fields (needed to distinguish resting
+ * TP/SL protection from plain limit orders).
+ */
+export interface FrontendOpenOrder {
+  coin: string;
+  side: 'B' | 'A';
+  limitPx: string;
+  sz: string;
+  oid: number;
+  timestamp: number;
+  origSz: string;
+  triggerCondition: string;
+  isTrigger: boolean;
+  triggerPx: string;
+  isPositionTpsl: boolean;
+  reduceOnly: boolean;
+  orderType: string;
+  tif: string | null;
+  cloid: string | null;
+}
+
 // ============ API Request/Response ============
 
 export interface InfoRequest {

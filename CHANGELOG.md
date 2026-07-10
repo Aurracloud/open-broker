@@ -7,6 +7,17 @@ All notable changes to Open Broker will be documented in this file.
 ### Added
 - Added an allowlisted `openbroker install <package>` command for optional companion packages, initially supporting `monitoring` (`openbroker-monitoring`) and `extended` (`openbroker-extended`). Re-running installs the latest release; `--tag`, `--dry`, and `--list` are supported.
 
+## [1.11.0] - 2026-07-10
+
+CLI/library port of the hosted guardian (`/markets/guardian`): the same read-only risk monitoring, delivered through your own Telegram bot instead of the hosted service.
+
+### Added
+- **`openbroker guardian` command family.** `guardian run` watches one or more addresses (default: the configured account) and alerts on the same six rules as the hosted guardian — liquidation proximity (10%/5%/2% tiers with hysteresis + cooldowns), high margin usage (80%), missing TP/SL protection (15 min unprotected), stale limit orders (12h+ resting and 3%+ from mid), funding bleed (15%+ APR paid for 60+ min), and position lifecycle (open/close/resize). Read-only: it never places orders. Thresholds, per-rule opt-outs (`--disable`/`--only`), and `--min-severity` are flags; `--json` emits JSON-lines for agents.
+- **Telegram delivery via your own bot.** `guardian connect` links a chat with a BotFather token + `/start <code>` deep link (persists `TELEGRAM_CHAT_ID` to the active config), `guardian test` sends a test message, `guardian status`/`guardian rules` show configuration. Alerts also POST to an OpenClaw agent gateway when `OPENCLAW_HOOKS_TOKEN` is set, so agents get woken on risk events.
+- **WebSocket liquidation fast lane.** Single-address runs subscribe to `userEvents` for instant LIQUIDATED alerts and fill-triggered re-polls; multi-address runs stay REST-only. Alerts are suppressed while the price feed is stale.
+- **Library surface** (minor bump): `startGuardian`, `Guardian`, `GuardianRiskEngine`, `DEFAULT_GUARDIAN_THRESHOLDS`, Telegram helpers (`sendTelegramMessage`, `formatTelegramAlert`, `waitForTelegramLink`, …), and the `Guardian*` types are exported from `scripts/lib.ts` so `openbroker-plugin` and other in-process consumers can embed the watcher.
+- `client.getFrontendOpenOrders(user?, dex?)` — open orders with frontend display fields (`isTrigger`, `reduceOnly`, `isPositionTpsl`, …), plus the `FrontendOpenOrder` type.
+
 ## [1.10.0] - 2026-07-03
 
 Ported the advanced-execution fixes validated in the trading panel review (`openbroker-landing/ADVANCED_EXECUTIONS_REVIEW.md`) to the CLI.

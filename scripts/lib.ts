@@ -104,3 +104,36 @@ export {
 } from './auto/registry.js';
 
 export type * from './auto/types.js';
+
+// ── Guardian (read-only position risk monitoring) ───────────────────
+
+export { startGuardian, Guardian } from './guardian/engine.js';
+export type {
+  GuardianOptions,
+  GuardianHandle,
+  GuardianStats,
+  GuardianTelegramChannel,
+  GuardianAgentHookChannel,
+} from './guardian/engine.js';
+
+export { GuardianRiskEngine } from './guardian/rules.js';
+export type { GuardianAlertHandler } from './guardian/rules.js';
+
+export {
+  sendTelegramMessage,
+  getTelegramBotInfo,
+  formatTelegramAlert,
+  loadTelegramSettings,
+  waitForTelegramLink,
+  generateLinkCode,
+  saveEnvVar,
+} from './guardian/telegram.js';
+export type { TelegramSettings } from './guardian/telegram.js';
+
+export {
+  GUARDIAN_RULE_IDS,
+  GUARDIAN_RULE_LABELS,
+  GUARDIAN_SEVERITY_RANK,
+  DEFAULT_GUARDIAN_THRESHOLDS,
+} from './guardian/types.js';
+export type * from './guardian/types.js';

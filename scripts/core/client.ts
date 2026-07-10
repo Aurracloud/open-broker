@@ -14,6 +14,7 @@ import type {
   ClearinghouseState,
   MarginSummary,
   OpenOrder,
+  FrontendOpenOrder,
   OutcomeMetaResponse,
   OutcomeMarket,
   OutcomeQuestion,
@@ -2348,6 +2349,22 @@ export class HyperliquidClient {
     }
 
     return orders;
+  }
+
+  /**
+   * Open orders with frontend display fields (isTrigger, reduceOnly,
+   * isPositionTpsl, …) for one dex — empty/omitted dex = main. Unlike
+   * getOpenOrders this does NOT aggregate HIP-3 dexes; callers that need a
+   * HIP-3 book pass its dex name explicitly.
+   */
+  async getFrontendOpenOrders(user?: string, dex?: string): Promise<FrontendOpenOrder[]> {
+    const target = (user ?? this.address) as `0x${string}`;
+    this.log('Fetching frontendOpenOrders for:', target, dex ? `(dex: ${dex})` : '');
+    const response = await this.withRetry(
+      () => this.info.frontendOpenOrders(dex ? { user: target, dex } : { user: target }),
+      'frontendOpenOrders',
+    );
+    return response as unknown as FrontendOpenOrder[];
   }
 
   // ============ Trading ============

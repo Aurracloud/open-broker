@@ -60,6 +60,9 @@ const commands: Record<string, { script: string; description: string }> = {
 
   // Automations
   'auto': { script: 'auto/cli.ts', description: 'Run/manage trading automations' },
+
+  // Guardian (position risk monitoring)
+  'guardian': { script: 'guardian/cli.ts', description: 'Watch positions for risk, alert via Telegram' },
 };
 
 function printHelp() {
@@ -126,6 +129,14 @@ Automations:
   auto examples        List bundled examples (dca, grid, funding-arb, mm-spread, mm-maker)
   auto list            List available automations
   auto status          Show running automations
+
+Guardian (read-only risk monitoring):
+  guardian run         Watch positions for liquidation risk, missing TP/SL,
+                       funding bleed and more; alerts to console + Telegram
+  guardian connect     Link a Telegram chat for alerts
+  guardian test        Send a test Telegram message
+  guardian status      Show guardian configuration
+  guardian rules       List alert rules and thresholds
 
 Options:
   -c, --config <path>  Use a specific .env config file

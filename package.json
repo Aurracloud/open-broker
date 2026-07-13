@@ -1,6 +1,6 @@
 {
   "name": "openbroker",
-  "version": "1.11.0",
+  "version": "1.12.0",
   "description": "Hyperliquid trading CLI - execute orders, manage positions, and run trading strategies",
   "type": "module",
   "bin": {
@@ -59,7 +59,7 @@
     "test:install": "node --import tsx --test scripts/setup/package-catalog.test.ts"
   },
   "dependencies": {
-    "@nktkas/hyperliquid": "^0.30.3",
+    "@nktkas/hyperliquid": "^0.33.1",
     "dotenv": "^17.2.3",
     "tsx": "^4.19.0",
     "viem": "^2.21.0"

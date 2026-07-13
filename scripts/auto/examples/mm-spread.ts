@@ -94,14 +94,14 @@ export default function mmSpread(api: AutomationAPI) {
     if (bidOid) {
       const drift = Math.abs(bidPrice - targetBid) / mid;
       if (drift > 0.001 || !shouldBid) {
-        try { await api.client.cancel(COIN, bidOid); } catch { /* */ }
+        try { await api.client.cancel(COIN, bidOid, { fast: true }); } catch { /* */ }
         bidOid = undefined;
       }
     }
     if (askOid) {
       const drift = Math.abs(askPrice - targetAsk) / mid;
       if (drift > 0.001 || !shouldAsk) {
-        try { await api.client.cancel(COIN, askOid); } catch { /* */ }
+        try { await api.client.cancel(COIN, askOid, { fast: true }); } catch { /* */ }
         askOid = undefined;
       }
     }
@@ -124,8 +124,8 @@ export default function mmSpread(api: AutomationAPI) {
   });
 
   api.onStop(async () => {
-    if (bidOid) try { await api.client.cancel(COIN, bidOid); } catch { /* */ }
-    if (askOid) try { await api.client.cancel(COIN, askOid); } catch { /* */ }
+    if (bidOid) try { await api.client.cancel(COIN, bidOid, { fast: true }); } catch { /* */ }
+    if (askOid) try { await api.client.cancel(COIN, askOid, { fast: true }); } catch { /* */ }
     const pnl = totalSellRevenue - totalBuyCost;
     api.log.info(`MM stopped. Bought: ${totalBought.toFixed(6)} | Sold: ${totalSold.toFixed(6)} | PnL: ${api.utils.formatUsd(pnl)}`);
   });

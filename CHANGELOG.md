@@ -6,6 +6,11 @@ All notable changes to Open Broker will be documented in this file.
 
 ### Added
 - Added an allowlisted `openbroker install <package>` command for optional companion packages, initially supporting `monitoring` (`openbroker-monitoring`) and `extended` (`openbroker-extended`). Re-running installs the latest release; `--tag`, `--dry`, and `--list` are supported.
+- **Fast cancels (`f: true`)** (minor bump): `client.cancel(coin, oid, { fast: true })` and `client.bulkCancel(cancels, { fast: true })` set the action-level fast flag so the mempool prioritizes the cancel — after the announced network upgrade, ONLY fast cancels get mempool prioritization. The API rejects fast cancels for trigger orders (TP/SL), so it is opt-in; `chase` and the `grid`/`mm-spread`/`mm-maker` example automations now fast-cancel their own resting quotes, and `openbroker cancel` accepts `--fast`.
+
+### Changed
+- **`l2Book` WS subscription now uses `fast: true`** (5 levels every 0.5s). Per the 2026-07 API announcement, non-fast l2Book subscriptions degrade to 20 levels every 5 seconds after the next network upgrade; every WS book consumer in the CLI (chase repricing, MM quoting, mid fallback) reads top-of-book only, so the fast feed strictly wins. Depth consumers are unaffected — the REST `l2Book` stays full-depth and is still what `getL2Book()` falls back to when the socket is down.
+- Upgraded `@nktkas/hyperliquid` 0.30.3 → 0.33.1 (adds `fast` l2Book + fast-cancel support; `webData2` — which this CLI never used — is deprecated server-side in favor of `webData3` + component subscriptions).
 
 ## [1.11.0] - 2026-07-10
 

@@ -64,7 +64,7 @@ export interface ChaseClient {
   getOpenOrders(): Promise<OpenOrder[]>;
   getUserFills(user?: string): Promise<Array<{ coin: string; px: string; sz: string; time: number; oid: number }>>;
   limitOrder(coin: string, isBuy: boolean, size: number, price: number, tif?: 'Gtc' | 'Ioc' | 'Alo', reduceOnly?: boolean, leverage?: number): Promise<OrderResponse>;
-  cancel(coin: string, oid: number): Promise<CancelResponse>;
+  cancel(coin: string, oid: number, opts?: { fast?: boolean }): Promise<CancelResponse>;
 }
 
 export interface ChaseResult {
@@ -207,7 +207,9 @@ export async function runChase(opts: ChaseOptions): Promise<ChaseResult> {
             break;
           }
           try {
-            await client.cancel(opts.coin, currentOid);
+            // Fast cancel (f: true): the chase quote is always a plain resting
+            // limit, and repricing latency is the whole point of chase.
+            await client.cancel(opts.coin, currentOid, { fast: true });
           } catch {
             // Order might have filled between the fill check and cancel.
           }
@@ -299,7 +301,7 @@ export async function runChase(opts: ChaseOptions): Promise<ChaseResult> {
       applyFills(currentOid);
       out(`\nCancelling unfilled order...`);
       try {
-        await client.cancel(opts.coin, currentOid);
+        await client.cancel(opts.coin, currentOid, { fast: true });
         out(`✅ Cancelled`);
       } catch {
         out(`⚠️ Could not cancel (may have filled)`);

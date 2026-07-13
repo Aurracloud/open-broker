@@ -144,7 +144,7 @@ export default function grid(api: AutomationAPI) {
     api.log.info('Cancelling grid orders...');
     for (const level of levels) {
       if (level.oid) {
-        try { await api.client.cancel(COIN, level.oid); } catch { /* may be filled */ }
+        try { await api.client.cancel(COIN, level.oid, { fast: true }); } catch { /* may be filled */ }
       }
     }
     api.log.info(`Grid stopped. Realized PnL: ${api.utils.formatUsd(realizedPnl)}`);

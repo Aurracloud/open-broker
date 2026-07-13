@@ -18,6 +18,8 @@ Options:
   --coin      Cancel orders for specific coin only
   --oid       Cancel specific order by ID
   --all       Cancel all open orders
+  --fast      Fast cancel (mempool-prioritized). Rejected by the API for
+              trigger orders (TP/SL) - use only on plain resting limits
   --dry       Dry run - show what would be cancelled
 
 Examples:
@@ -34,6 +36,7 @@ async function main() {
   const coin = args.coin as string | undefined;
   const oid = args.oid ? parseInt(args.oid as string) : undefined;
   const all = args.all as boolean;
+  const fast = args.fast as boolean;
   const dryRun = args.dry as boolean;
 
   // Must specify something to cancel
@@ -99,7 +102,7 @@ async function main() {
 
     for (const order of targetOrders) {
       try {
-        const response = await client.cancel(order.coin, order.oid);
+        const response = await client.cancel(order.coin, order.oid, { fast });
         if (response.status === 'ok') {
           console.log(`✅ Cancelled ${order.coin} order ${order.oid}`);
           successCount++;

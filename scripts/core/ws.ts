@@ -251,12 +251,10 @@ export class WebSocketManager {
   }
 
   private trackSub(sub: ISubscription): ISubscription {
+    // SDK ≥0.33 dropped ISubscription.failureSignal, so a sub that dies after a
+    // failed resubscribe stays in this list; close() swallows unsubscribe errors,
+    // so a dead handle there is harmless.
     this.subscriptions.push(sub);
-    sub.failureSignal.addEventListener('abort', () => {
-      this.log('Subscription failed, removing from tracked list');
-      const idx = this.subscriptions.indexOf(sub);
-      if (idx >= 0) this.subscriptions.splice(idx, 1);
-    });
     return sub;
   }
 
@@ -275,10 +273,15 @@ export class WebSocketManager {
 
   /**
    * Subscribe to L2 order book snapshots for a specific coin.
+   *
+   * `fast: true` = 5 levels every 0.5s; without it the API degrades to 20 levels
+   * every 5s (per the 2026-07 network-upgrade announcement). Every consumer here
+   * reads top-of-book only (chase / mm quoting / mid fallback), so fast wins;
+   * anything needing depth should use the REST l2Book, which stays full-depth.
    */
   async subscribeL2Book(coin: string): Promise<ISubscription> {
     const client = this.ensureClient();
-    const sub = await client.l2Book({ coin }, (data: L2BookWsEvent) => {
+    const sub = await client.l2Book({ coin, fast: true }, (data: L2BookWsEvent) => {
       this.emit('l2Book', {
         coin: data.coin,
         time: data.time,

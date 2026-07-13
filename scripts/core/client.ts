@@ -3007,17 +3007,24 @@ export class HyperliquidClient {
     }
   }
 
-  async cancel(coin: string, oid: number): Promise<CancelResponse> {
+  /**
+   * `fast: true` sets the action's `f` flag so the mempool prioritizes the cancel
+   * (post-2026-07 upgrade, only fast cancels get prioritization). The API REJECTS
+   * fast cancels for trigger orders (TP/SL), so only pass it when the oid is known
+   * to be a plain resting limit — e.g. a quoting loop cancelling its own quotes.
+   */
+  async cancel(coin: string, oid: number, opts?: { fast?: boolean }): Promise<CancelResponse> {
     await this.requireTrading();
     await this.getMetaAndAssetCtxs();
 
     const assetIndex = this.getAssetIndex(coin);
 
-    this.log(`Cancelling order: ${coin} (asset ${assetIndex}) oid ${oid}`);
+    this.log(`Cancelling order: ${coin} (asset ${assetIndex}) oid ${oid}${opts?.fast ? ' (fast)' : ''}`);
 
     try {
       const response = await this.exchange.cancel({
         cancels: [{ a: assetIndex, o: oid }],
+        ...(opts?.fast ? { f: true as const } : {}),
       }, this.vaultParam);
       this.log('Cancel response:', JSON.stringify(response, null, 2));
       return response as unknown as CancelResponse;
@@ -3033,14 +3040,16 @@ export class HyperliquidClient {
   /**
    * Cancel MANY resting orders in a SINGLE exchange request (one action-rate request for ≤40 cancels),
    * the counterpart to `bulkOrder`. `response.data.statuses[i]` aligns with `cancels[i]`.
+   * `fast` applies to the whole action and is rejected for trigger orders — see cancel().
    */
-  async bulkCancel(cancels: Array<{ coin: string; oid: number }>): Promise<CancelResponse> {
+  async bulkCancel(cancels: Array<{ coin: string; oid: number }>, opts?: { fast?: boolean }): Promise<CancelResponse> {
     await this.requireTrading();
     await this.getMetaAndAssetCtxs();
     if (cancels.length === 0) return { status: 'ok', response: { type: 'cancel', data: { statuses: [] } } } as unknown as CancelResponse;
     try {
       const response = await this.exchange.cancel({
         cancels: cancels.map((c) => ({ a: this.getAssetIndex(c.coin), o: c.oid })),
+        ...(opts?.fast ? { f: true as const } : {}),
       }, this.vaultParam);
       this.log('Bulk cancel response:', JSON.stringify(response, null, 2));
       return response as unknown as CancelResponse;

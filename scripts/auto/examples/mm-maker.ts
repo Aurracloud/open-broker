@@ -98,14 +98,14 @@ export default function mmMaker(api: AutomationAPI) {
     if (bidOid) {
       const drift = Math.abs(bidPrice - safeBid) / book.midPrice;
       if (drift > 0.0005 || !shouldBid) {
-        try { await api.client.cancel(COIN, bidOid); } catch { /* */ }
+        try { await api.client.cancel(COIN, bidOid, { fast: true }); } catch { /* */ }
         bidOid = undefined;
       }
     }
     if (askOid) {
       const drift = Math.abs(askPrice - safeAsk) / book.midPrice;
       if (drift > 0.0005 || !shouldAsk) {
-        try { await api.client.cancel(COIN, askOid); } catch { /* */ }
+        try { await api.client.cancel(COIN, askOid, { fast: true }); } catch { /* */ }
         askOid = undefined;
       }
     }
@@ -132,8 +132,8 @@ export default function mmMaker(api: AutomationAPI) {
   });
 
   api.onStop(async () => {
-    if (bidOid) try { await api.client.cancel(COIN, bidOid); } catch { /* */ }
-    if (askOid) try { await api.client.cancel(COIN, askOid); } catch { /* */ }
+    if (bidOid) try { await api.client.cancel(COIN, bidOid, { fast: true }); } catch { /* */ }
+    if (askOid) try { await api.client.cancel(COIN, askOid, { fast: true }); } catch { /* */ }
     const pnl = totalSellRevenue - totalBuyCost;
     const volume = totalBuyCost + totalSellRevenue;
     const rebates = volume * 0.00003;

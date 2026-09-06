@@ -21,6 +21,7 @@ import type {
 } from './types.js';
 import { loadConfig, isMainnet } from './config.js';
 import { MIN_ORDER_NOTIONAL_USD, roundPrice, roundSize } from './utils.js';
+import { resolveOutcomeTemplates, type OutcomeTemplate } from './outcome-templates.js';
 
 export interface RealtimeBookSnapshot {
   coin: string;
@@ -797,6 +798,10 @@ export class HyperliquidClient {
   }
 
   getOutcomeEncoding(outcome: number, side: 0 | 1): number {
+    if (!Number.isSafeInteger(outcome) || outcome < 0 || (side !== 0 && side !== 1)
+      || !Number.isSafeInteger(100_000_000 + 10 * outcome + side)) {
+      throw new Error('Invalid outcome id or side. Use a nonnegative integer id and side 0/1.');
+    }
     return 10 * outcome + side;
   }
 
@@ -830,6 +835,9 @@ export class HyperliquidClient {
     }
 
     const trimmed = ref.trim();
+    if (!/^[#+]?\d+$/.test(trimmed)) {
+      throw new Error(`Invalid outcome reference "${ref}". Use an outcome id, #<encoding>, or +<encoding>.`);
+    }
     const encoded = trimmed.startsWith('#') || trimmed.startsWith('+')
       ? parseInt(trimmed.slice(1), 10)
       : NaN;
@@ -840,6 +848,10 @@ export class HyperliquidClient {
         throw new Error(`Invalid outcome encoding "${ref}". Outcome side must encode to 0 or 1.`);
       }
       const outcome = Math.floor(encoded / 10);
+      this.getOutcomeEncoding(outcome, resolvedSide);
+      if (side !== undefined && this.normalizeOutcomeSide(side) !== resolvedSide) {
+        throw new Error('Outcome side conflicts with the encoded coin.');
+      }
       return {
         outcome,
         side: resolvedSide as 0 | 1,
@@ -924,11 +936,14 @@ export class HyperliquidClient {
   }
 
   async getOutcomeMarkets(): Promise<OutcomeMarket[]> {
-    const [meta, spotMeta, ctxMap] = await Promise.all([
+    const [rawMeta, spotMeta, ctxMap] = await Promise.all([
       this.getOutcomeMeta(),
       this.getSpotMeta().catch(() => null),
       this.getOutcomeCtxMap(),
     ]);
+    const templates = [...rawMeta.outcomes, ...(rawMeta.questions ?? [])].some(o => o.name.startsWith('template:'))
+      ? await this.getOutcomeTemplates() : [];
+    const meta = resolveOutcomeTemplates(rawMeta, templates);
 
     const tokenDecimals = new Map<number, number>();
     if (spotMeta) {
@@ -945,7 +960,7 @@ export class HyperliquidClient {
       questions.set(question.fallbackOutcome, question);
     }
 
-    return meta.outcomes.map((outcome) => {
+    return meta.outcomes.map((outcome, index) => {
       const sides = outcome.sideSpecs.map((sideSpec, idx) => {
         const side = idx as 0 | 1;
         const encoding = this.getOutcomeEncoding(outcome.outcome, side);
@@ -959,7 +974,7 @@ export class HyperliquidClient {
           tokenName: `+${encoding}`,
           assetId: 100_000_000 + encoding,
           token: sideSpec.token,
-          szDecimals: sideSpec.token !== undefined ? tokenDecimals.get(sideSpec.token) : undefined,
+          szDecimals: sideSpec.token !== undefined ? tokenDecimals.get(sideSpec.token) ?? 0 : 0,
           midPx: ctx?.midPx ?? undefined,
           markPx: ctx?.markPx,
           prevDayPx: ctx?.prevDayPx,
@@ -971,7 +986,12 @@ export class HyperliquidClient {
         outcome: outcome.outcome,
         name: outcome.name,
         description: outcome.description,
-        parsedDescription: this.parseOutcomeDescription(outcome.description),
+        parsedDescription: this.parseOutcomeDescription(rawMeta.outcomes[index].description),
+        rawName: rawMeta.outcomes[index].name,
+        rawDescription: rawMeta.outcomes[index].description,
+        quoteToken: outcome.quoteToken,
+        venue: outcome.venue,
+        deployerFeeScale: outcome.deployerFeeScale,
         sides,
         question: questions.get(outcome.outcome),
       };
@@ -983,9 +1003,15 @@ export class HyperliquidClient {
     return markets.find((market) => market.outcome === outcomeId) ?? null;
   }
 
+  async getOutcomeTemplates(): Promise<OutcomeTemplate[]> {
+    return this.postInfo<OutcomeTemplate[]>({ type: 'outcomeTemplates' }, 'outcomeTemplates');
+  }
+
   async getOutcomeSzDecimals(outcome: number, side: 0 | 1): Promise<number> {
     const market = await this.getOutcomeMarket(outcome);
-    return market?.sides.find((s) => s.side === side)?.szDecimals ?? 0;
+    const marketSide = market?.sides.find((s) => s.side === side);
+    if (!marketSide) throw new Error(`Outcome side ${outcome}/${side} is not in active market metadata.`);
+    return marketSide.szDecimals ?? 0;
   }
 
   async getOutcomeMidPrice(outcome: number, side: 0 | 1): Promise<number> {
@@ -3283,6 +3309,10 @@ export class HyperliquidClient {
 
     const resolved = this.resolveOutcomeRef(outcomeRef, outcomeSide);
     const szDecimals = szDecimalsOverride ?? await this.getOutcomeSzDecimals(resolved.outcome, resolved.side);
+    if (!Number.isFinite(price) || price <= 0 || price >= 1) throw new Error('Outcome price must be between 0 and 1.');
+    if (!Number.isFinite(size) || size <= 0) throw new Error('Outcome size must be positive and finite.');
+    if (!Number.isInteger(szDecimals) || szDecimals < 0 || szDecimals > 8) throw new Error('Invalid outcome size decimals.');
+    if (!['Gtc', 'Ioc', 'Alo'].includes(orderType.limit.tif)) throw new Error('Invalid outcome time in force.');
 
     const orderWire = {
       a: resolved.assetId,
@@ -3292,6 +3322,10 @@ export class HyperliquidClient {
       r: false,
       t: orderType,
     };
+
+    if (+orderWire.s <= 0 || +orderWire.p <= 0 || +orderWire.p >= 1) {
+      throw new Error('Outcome order rounds to an invalid price or zero size.');
+    }
 
     this.log('Placing outcome order:', JSON.stringify({ resolved, orderWire }, null, 2));
 
@@ -3333,9 +3367,10 @@ export class HyperliquidClient {
     const resolved = this.resolveOutcomeRef(outcomeRef, outcomeSide);
     const midPrice = await this.getOutcomeMidPrice(resolved.outcome, resolved.side);
     const slippage = (slippageBps ?? this.config.slippageBps) / 10000;
-    const limitPrice = isBuy
+    if (!Number.isFinite(slippage) || slippage < 0 || slippage >= 1) throw new Error('Outcome slippage must be between 0 and 10000 bps.');
+    const limitPrice = Math.min(0.99999, Math.max(0.00000001, isBuy
       ? midPrice * (1 + slippage)
-      : midPrice * (1 - slippage);
+      : midPrice * (1 - slippage)));
 
     this.log(`Outcome market order: ${resolved.coin} ${isBuy ? 'BUY' : 'SELL'} ${size} @ ${limitPrice} (mid: ${midPrice})`);
 

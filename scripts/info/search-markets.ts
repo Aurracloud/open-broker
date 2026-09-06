@@ -247,7 +247,7 @@ async function main() {
       const outcomes = await client.getOutcomeMarkets();
       for (const market of outcomes) {
         const parsed = Object.values(market.parsedDescription).join(' ');
-        const searchable = `${market.name} ${market.description} ${parsed}`.toUpperCase();
+        const searchable = `${market.name} ${market.description} ${market.question?.name ?? ""} ${market.question?.description ?? ""} ${parsed}`.toUpperCase();
         if (!searchable.includes(query)) continue;
 
         for (const side of market.sides) {

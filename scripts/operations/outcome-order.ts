@@ -49,11 +49,11 @@ async function main() {
   const outcomeRef = args.outcome as string;
   const outcomeSide = args['outcome-side'] as string | undefined;
   const side = args.side as string;
-  const size = parseFloat(args.size as string);
-  const price = args.price ? parseFloat(args.price as string) : undefined;
+  const size = Number(args.size);
+  const price = args.price !== undefined ? Number(args.price) : undefined;
   const tif = (args.tif as 'Gtc' | 'Ioc' | 'Alo') ?? 'Gtc';
-  const slippage = args.slippage ? parseInt(args.slippage as string) : undefined;
-  const szDecimals = args['sz-decimals'] ? parseInt(args['sz-decimals'] as string, 10) : undefined;
+  const slippage = Number(args.slippage ?? process.env.SLIPPAGE_BPS ?? 50);
+  const szDecimals = args['sz-decimals'] !== undefined ? Number(args['sz-decimals']) : undefined;
   const dryRun = args.dry as boolean;
 
   if (!outcomeRef || !side || isNaN(size)) {
@@ -66,20 +66,23 @@ async function main() {
     process.exit(1);
   }
 
-  if (size <= 0) {
+  if (!Number.isFinite(size) || size <= 0) {
     console.error('Error: --size must be positive');
     process.exit(1);
   }
 
-  if (price !== undefined && (price <= 0 || price >= 1)) {
+  if (price !== undefined && (!Number.isFinite(price) || price <= 0 || price >= 1)) {
     console.error('Error: --price must be between 0 and 1 for outcome tokens');
     process.exit(1);
   }
 
-  if (szDecimals !== undefined && (szDecimals < 0 || szDecimals > 8)) {
+  if (szDecimals !== undefined && (!Number.isInteger(szDecimals) || szDecimals < 0 || szDecimals > 8)) {
     console.error('Error: --sz-decimals must be between 0 and 8');
     process.exit(1);
   }
+
+  if (!['Gtc', 'Ioc', 'Alo'].includes(tif)) throw new Error('Invalid --tif. Use Gtc, Ioc, or Alo.');
+  if (slippage !== undefined && (!Number.isFinite(slippage) || slippage < 0 || slippage >= 10000)) throw new Error('Invalid --slippage. Use 0 to less than 10000 bps.');
 
   const client = getClient();
   if (args.verbose) client.verbose = true;
@@ -90,17 +93,17 @@ async function main() {
   console.log('Open Broker - HIP-4 Outcome Order');
   console.log('=================================\n');
 
-  await checkBuilderFeeApproval(client);
 
   try {
     const resolved = client.resolveOutcomeRef(outcomeRef, outcomeSide);
     const market = await client.getOutcomeMarket(resolved.outcome);
     const marketSide = market?.sides.find((s) => s.side === resolved.side);
-    const sideName = marketSide?.name ?? (resolved.side === 0 ? 'Yes' : 'No');
+    if (!market || !marketSide) throw new Error('Outcome side is not present in active market metadata.');
+    const sideName = marketSide.name;
     const midPrice = await client.getOutcomeMidPrice(resolved.outcome, resolved.side);
     const slippageBps = slippage ?? 50;
     const limitPrice = isMarket
-      ? (isBuy ? midPrice * (1 + slippageBps / 10000) : midPrice * (1 - slippageBps / 10000))
+      ? Math.min(0.99999, Math.max(0.00000001, isBuy ? midPrice * (1 + slippageBps / 10000) : midPrice * (1 - slippageBps / 10000)))
       : price;
     const notional = midPrice * size;
 
@@ -134,6 +137,7 @@ async function main() {
       return;
     }
 
+    await checkBuilderFeeApproval(client);
     console.log('\nExecuting...');
 
     const response = isMarket
@@ -177,7 +181,6 @@ async function main() {
     }
   } catch (error) {
     console.error('Error executing outcome order:', error);
-    console.error('Note: Hyperliquid currently documents outcomeMeta as testnet-only.');
     process.exit(1);
   }
 }

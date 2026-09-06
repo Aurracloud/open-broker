@@ -113,7 +113,7 @@ export interface WsEventMap {
      * response is to flatten the opposite hedge, NOT to place a new same-size hedge.
      */
     liquidation?: {
-      liquidatedUser: string;
+      liquidatedUser?: string;
       markPx: string;
       method: 'market' | 'backstop';
     };

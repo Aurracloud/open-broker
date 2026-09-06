@@ -187,6 +187,8 @@ openbroker spot --top 20         # Top 20 by volume
 
 Search and inspect prediction/outcome markets. Outcome sides use Hyperliquid's encoded spot-like coin form: `#<encoding>`, where `encoding = 10 * outcomeId + side`; side `0` is usually YES and side `1` is usually NO.
 
+Template markets are expanded using Hyperliquid's `outcomeTemplates` registry, including custom side labels and parent questions. Check the displayed side labels before trading: sides can represent teams, Long/Short, or Over/Under. JSON output retains `rawName`, `rawDescription`, and parsed keyword values alongside the expanded text, quote token, venue, and deployer fee scale. Search also matches the parent question. Unknown templates produce an explicit error instead of unresolved labels.
+
 ```bash
 openbroker outcomes --query BTC
 openbroker outcomes --outcome 123

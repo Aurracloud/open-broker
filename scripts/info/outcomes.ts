@@ -100,7 +100,7 @@ async function main() {
     if (args.balances) {
       const balances = await client.getSpotBalances();
       const outcomeBalances = (balances.balances ?? []).filter((b) =>
-        b.coin.startsWith('+') || b.coin.startsWith('#')
+        b.coin.startsWith('+') || b.coin.startsWith('#') || /^o\d+$/.test(b.coin)
       );
 
       if (args.json) {
@@ -140,7 +140,7 @@ async function main() {
       const query = args.query.toUpperCase();
       markets = markets.filter((market) => {
         const parsed = Object.values(market.parsedDescription).join(' ');
-        const searchable = `${market.name} ${market.description} ${parsed}`.toUpperCase();
+        const searchable = `${market.name} ${market.description} ${market.question?.name ?? ""} ${market.question?.description ?? ""} ${parsed}`.toUpperCase();
         return searchable.includes(query);
       });
     }
@@ -174,7 +174,7 @@ async function main() {
         spec.expiry ? `exp ${spec.expiry}` : undefined,
         spec.targetPrice ? `target ${spec.targetPrice}` : undefined,
       ].filter(Boolean);
-      const label = labelParts.length > 0 ? labelParts.join(' | ') : market.description;
+      const label = [market.question?.name, market.name, ...labelParts].filter(Boolean).join(' | ');
 
       for (const side of market.sides) {
         console.log(
@@ -185,14 +185,13 @@ async function main() {
       }
 
       if (args.verbose) {
-        console.log(`          Description: ${market.description}`);
+        console.log(`          Description: ${market.rawDescription ?? market.description}`);
         if (market.question) console.log(`          Question: ${market.question.name}`);
       }
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`Error: ${message}`);
-    console.error('Note: Hyperliquid currently documents outcomeMeta as testnet-only.');
     process.exit(1);
   }
 }

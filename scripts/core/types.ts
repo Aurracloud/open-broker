@@ -131,6 +131,9 @@ export interface OutcomeMetaEntry {
   name: string;
   description: string;
   sideSpecs: OutcomeSideSpec[];
+  quoteToken?: string;
+  venue?: string;
+  deployerFeeScale?: string;
 }
 
 export interface OutcomeQuestion {
@@ -152,6 +155,11 @@ export interface OutcomeMarket {
   name: string;
   description: string;
   parsedDescription: Record<string, string>;
+  rawName?: string;
+  rawDescription?: string;
+  quoteToken?: string;
+  venue?: string;
+  deployerFeeScale?: string;
   sides: Array<{
     side: 0 | 1;
     name: string;

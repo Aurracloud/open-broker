@@ -120,6 +120,8 @@ export interface GuardianPositionSnap {
   unrealizedPnl: number;
   liquidationPx: number | null;
   leverage: number;
+  /** Isolated positions ring-fence their margin; excluded from margin usage. */
+  isolated: boolean;
   marginUsed: number;
 }
 

@@ -118,6 +118,7 @@ function parsePositions(state: ClearinghouseState): Map<string, GuardianPosition
       unrealizedPnl: num(p.unrealizedPnl) ?? 0,
       liquidationPx: num(p.liquidationPx ?? null),
       leverage: p.leverage?.value ?? 0,
+      isolated: p.leverage?.type === 'isolated',
       marginUsed: num(p.marginUsed) ?? 0,
     });
   }
@@ -428,8 +429,12 @@ export class Guardian {
         if (!positions.has(coin)) target.firstSeen.delete(coin);
       }
 
+      // getUserStateAll already resolves unified-account equity (spot USDC). Usage counts
+      // CROSS margin only: isolated positions ring-fence their margin (covered per-position
+      // by liq_proximity), and counting them made a lone isolated position read as 100%.
       const equity = num(state.marginSummary?.accountValue) ?? 0;
-      const marginUsed = num(state.marginSummary?.totalMarginUsed) ?? 0;
+      let marginUsed = 0;
+      for (const pos of positions.values()) if (!pos.isolated) marginUsed += pos.marginUsed;
 
       target.positions = positions;
       target.equity = equity;
